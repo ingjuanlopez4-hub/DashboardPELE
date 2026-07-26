@@ -103,6 +103,26 @@ Strategy parameters and circuit‑breaker thresholds are tuned in `src/config/li
 
 ## Usage
 
+### Web dashboard (Vercel)
+
+The repository includes a serverless market dashboard in `web/` with public API
+functions in `api/`. It displays live Gamma market data without exposing wallet
+credentials or running the trading loop in Vercel.
+
+```bash
+# Production-equivalent local preview (requires the Vercel CLI)
+vercel dev
+
+# Deploy a preview, then production
+vercel
+vercel --prod
+```
+
+See [`WEB_DEPLOYMENT.md`](WEB_DEPLOYMENT.md) for architecture, validation, and
+the operational limits that keep live trading on an always-on host.
+
+### CLI
+
 The CLI is available as `scripts/entry_point.py` (aliased as `pele`):
 
 ```bash

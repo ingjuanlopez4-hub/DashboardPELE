@@ -19,6 +19,8 @@ venv/
 .idea/
 *.swp
 *.swo
+.vercel/
+.playwright-mcp/
 
 # Database files
 *.db
@@ -49,3 +51,4 @@ Thumbs.db
 # Generated root-level reports
 whitepaper.html
 whitepaper.json
+pele-dashboard.png
