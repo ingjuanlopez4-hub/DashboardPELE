@@ -1,4 +1,11 @@
 <!doctype html>
+<!--
+  THESIS: PELE pasa de fotografiar cuotas a revelar dirección, concentración y fiabilidad; evita el dashboard de métricas aisladas.
+  OWN-WORLD: Sala de señales azul, paneles rectos, rieles medibles y ámbar reservado a decisiones o anomalías.
+  STORY: El usuario detecta qué cambió, comprueba quién mueve el dinero, contrasta la señal y activa vigilancia.
+  FIRST VIEWPORT: La tesis editorial y la escala de probabilidad permanecen intactas; la inteligencia verificable comienza justo después.
+  FORM: Extensión Operate del sistema existente, organizada como radar y expedientes desplegables en lugar de una nueva identidad.
+-->
 <html lang="es">
 <head>
   <meta charset="utf-8">
@@ -17,9 +24,10 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span>PELE <small>Predictive market radar</small></span>
     </a>
-    <div class="topbar-meta">
-      <span class="edition">Gamma / mercados abiertos</span>
-      <div class="live-indicator" id="data-status" data-state="loading" role="status">
+      <div class="topbar-meta">
+        <span class="edition">Gamma / mercados abiertos</span>
+        <a class="alert-counter" href="#alerts" aria-label="Ir al centro de alertas"><span id="alert-count">0</span> alertas</a>
+        <div class="live-indicator" id="data-status" data-state="loading" role="status">
         <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
       </div>
     </div>
@@ -49,6 +57,37 @@
       <article><span>Consenso medio</span><strong id="kpi-probability">--</strong><small>probabilidad de “Sí”</small></article>
     </section>
 
+    <section class="intelligence" aria-labelledby="intelligence-title">
+      <header class="intelligence-heading">
+        <div>
+          <p class="signal-kicker">Prueba de confianza / modelo PELE</p>
+          <h2 id="intelligence-title">No basta con acertar hoy.</h2>
+        </div>
+        <p>La calidad de una señal se mide por lo que hizo antes y por cómo está cambiando ahora.</p>
+      </header>
+      <div class="validation-board">
+        <article class="hit-rate">
+          <div class="panel-label"><span>Backtesting de convicción alta</span><small>Simulación ilustrativa · 50 resoluciones</small></div>
+          <div class="hit-rate-main"><strong>92<span>%</span></strong><p>46 de 50 mercados clasificados como “Casi seguro” terminaron en la dirección prevista.</p></div>
+          <div class="calibration" aria-label="Acierto simulado por nivel de convicción">
+            <div><span>Alta</span><i><b style="width:92%"></b></i><strong>92%</strong></div>
+            <div><span>Media</span><i><b style="width:71%"></b></i><strong>71%</strong></div>
+            <div><span>Baja</span><i><b style="width:54%"></b></i><strong>54%</strong></div>
+          </div>
+          <p class="demo-disclaimer">Datos sintéticos para demostrar la experiencia. Conecta el histórico de resoluciones para convertirlos en evidencia auditable.</p>
+        </article>
+        <aside class="alert-desk" id="alerts" aria-labelledby="alerts-title">
+          <div class="panel-label"><span id="alerts-title">Vigilancia inteligente</span><small>Guardada en este navegador</small></div>
+          <strong id="alert-desk-count">Sin mercados vigilados</strong>
+          <p>Activa una alerta desde cualquier expediente para seguir cambios de categoría, picos de actividad o nuevas oportunidades.</p>
+          <div class="alert-events" id="alert-events" aria-live="polite"><span>Sin eventos evaluados.</span></div>
+          <div class="alert-rules" aria-label="Reglas de alerta disponibles">
+            <span>Cambio de convicción</span><span>Pico de volumen</span><span>EV &gt; 8%</span>
+          </div>
+        </aside>
+      </div>
+    </section>
+
     <section class="workspace" id="markets" aria-labelledby="markets-title">
       <div class="section-heading">
         <div>
@@ -65,6 +104,18 @@
           <input id="search" type="search" placeholder="Bitcoin, elecciones, tipos..." autocomplete="off">
         </label>
         <label><span class="control-label">Categoría</span><select id="category"><option value="all">Todas las categorías</option></select></label>
+        <label><span class="control-label">Cierre</span><select id="closing">
+          <option value="all">Cualquier fecha</option>
+          <option value="7">Próximos 7 días</option>
+          <option value="30">Próximos 30 días</option>
+          <option value="90">Próximos 90 días</option>
+        </select></label>
+        <label><span class="control-label">Liquidez mínima</span><select id="min-liquidity">
+          <option value="0">Sin mínimo</option>
+          <option value="50000">50.000 $</option>
+          <option value="250000">250.000 $</option>
+          <option value="1000000">1 millón $</option>
+        </select></label>
         <label><span class="control-label">Ordenar por</span><select id="sort">
           <option value="volume">Mayor volumen</option>
           <option value="liquidity">Mayor liquidez</option>
@@ -72,6 +123,7 @@
           <option value="confidence">Mejor señal</option>
           <option value="date">Fecha más próxima</option>
         </select></label>
+        <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Modo oportunidad</b><small>Solo valor esperado ≥ 8%</small></span></label>
       </form>
 
       <div id="notice" class="notice" hidden role="status"></div>
