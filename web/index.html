@@ -11,9 +11,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Panel público de inteligencia de mercados activos de Polymarket.">
-  <meta name="theme-color" content="#071d2b">
+  <meta name="theme-color" content="#1746d1">
   <title>PELE // Market Intelligence</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Instrument+Sans:wdth,wght@75..100,400..700&family=League+Gothic&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
 </head>
@@ -36,17 +39,21 @@
   <main>
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
-        <p class="eyebrow">Radar de convicción / Polymarket</p>
-        <h1 id="page-title">Todo mercado<br>acaba en <em>sí</em><br><span>o no.</span></h1>
-        <p class="intro">Lo difícil es saber cuánto creerle. PELE cruza probabilidad, liquidez y actividad para separar una cuota popular de una señal sólida.</p>
-        <a class="hero-link" href="#markets">Explorar mercados <span aria-hidden="true">↓</span></a>
+        <p class="eyebrow">Mesa pública de contratos binarios</p>
+        <h1 id="page-title">No predice<br>el futuro.<br><span>Mide cuánto</span><br><em>cuesta creerlo.</em></h1>
+        <div class="hero-bottom">
+          <p class="intro">PELE cruza precio, liquidez y actividad para distinguir una cuota popular de una señal que merece atención.</p>
+          <a class="hero-link" href="#markets">Encontrar una señal <span aria-hidden="true">↓</span></a>
+        </div>
       </div>
-      <div class="probability-scale" aria-label="Escala de probabilidad, desde casi seguro hasta casi imposible">
-        <span class="scale-label scale-top"><b>100</b> Casi seguro</span>
-        <span class="scale-label scale-mid"><b>50</b> Mercado dividido</span>
-        <span class="scale-label scale-bottom"><b>0</b> Casi imposible</span>
-        <span class="scale-line" aria-hidden="true"></span>
-        <span class="scale-marker" aria-hidden="true"><i></i><b>La cuota es una opinión con precio</b></span>
+      <div class="verdict" id="verdict" style="--yes: 50%" aria-label="Consenso agregado de los mercados observados">
+        <div class="verdict-caption"><span>Consenso agregado</span><span>Precio vivo / muestra actual</span></div>
+        <div class="verdict-contract">
+          <div class="verdict-yes"><span>SÍ</span><strong id="verdict-yes">50%</strong></div>
+          <div class="verdict-no"><span>NO</span><strong id="verdict-no">50%</strong></div>
+          <i class="verdict-seam" aria-hidden="true"><b></b></i>
+        </div>
+        <p>La costura se mueve con el precio medio. No indica certeza: indica cuánto paga hoy el mercado por creer.</p>
       </div>
     </section>
 
@@ -60,8 +67,8 @@
     <section class="intelligence" aria-labelledby="intelligence-title">
       <header class="intelligence-heading">
         <div>
-          <p class="signal-kicker">Prueba de confianza / modelo PELE</p>
-          <h2 id="intelligence-title">No basta con acertar hoy.</h2>
+          <p class="signal-kicker">Memoria de la señal / modelo PELE</p>
+          <h2 id="intelligence-title">La señal tiene memoria.</h2>
         </div>
         <p>La calidad de una señal se mide por lo que hizo antes y por cómo está cambiando ahora.</p>
       </header>
@@ -91,8 +98,8 @@
     <section class="workspace" id="markets" aria-labelledby="markets-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Señales comparables</p>
-          <h2 id="markets-title">El radar, ahora</h2>
+          <p class="eyebrow">Mesa de consulta</p>
+          <h2 id="markets-title">Contratos en observación</h2>
         </div>
         <p id="result-count" aria-live="polite">Consultando Gamma...</p>
       </div>

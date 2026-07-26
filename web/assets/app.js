@@ -112,6 +112,12 @@ function updateKpis() {
   document.querySelector("#kpi-liquidity").textContent = money.format(total("liquidity"));
   const average = state.markets.length ? total("probability") / state.markets.length : 0;
   document.querySelector("#kpi-probability").textContent = percent.format(average);
+  const verdict = document.querySelector("#verdict");
+  const yes = Math.round(average * 100);
+  verdict.style.setProperty("--yes", `${yes}%`);
+  document.querySelector("#verdict-yes").textContent = `${yes}%`;
+  document.querySelector("#verdict-no").textContent = `${100 - yes}%`;
+  verdict.setAttribute("aria-label", `Consenso agregado: Sí ${yes}%, No ${100 - yes}%`);
 }
 
 function setDataStatus(status, label) {
