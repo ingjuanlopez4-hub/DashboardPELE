@@ -1,10 +1,10 @@
 "use strict";
 
 const DEMO_MARKETS = [
-  { id: "demo-1", question: "Will Bitcoin trade above $150,000 before 2027?", category: "Crypto", probability: .42, volume: 18400000, volume24h: 520000, liquidity: 840000, confidence: { score: 86, level: "high", coverage: 100, factors: [] }, endDate: "2026-12-31T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-2", question: "Will the Federal Reserve cut rates at the next meeting?", category: "Economy", probability: .67, volume: 7200000, volume24h: 310000, liquidity: 460000, confidence: { score: 78, level: "high", coverage: 100, factors: [] }, endDate: "2026-09-16T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-3", question: "Will an AI model lead the global app charts this quarter?", category: "Technology", probability: .31, volume: 2900000, volume24h: 94000, liquidity: 175000, confidence: { score: 61, level: "medium", coverage: 85, factors: [] }, endDate: "2026-09-30T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-4", question: "Will a new album debut at number one this month?", category: "Culture", probability: .56, volume: 1300000, volume24h: 68000, liquidity: 98000, confidence: { score: 48, level: "low", coverage: 75, factors: [] }, endDate: "2026-08-31T00:00:00Z", url: "https://polymarket.com" }
+  { id: "demo-1", question: "¿Cotizará Bitcoin por encima de 150.000 $ antes de 2027?", category: "Cripto", probability: .42, volume: 18400000, volume24h: 520000, liquidity: 840000, confidence: { score: 86, level: "high", coverage: 100, factors: [] }, endDate: "2026-12-31T00:00:00Z", url: "https://polymarket.com" },
+  { id: "demo-2", question: "¿Recortará tipos la Reserva Federal en su próxima reunión?", category: "Economía", probability: .67, volume: 7200000, volume24h: 310000, liquidity: 460000, confidence: { score: 78, level: "high", coverage: 100, factors: [] }, endDate: "2026-09-16T00:00:00Z", url: "https://polymarket.com" },
+  { id: "demo-3", question: "¿Liderará un modelo de IA las listas mundiales de aplicaciones este trimestre?", category: "Tecnología", probability: .31, volume: 2900000, volume24h: 94000, liquidity: 175000, confidence: { score: 61, level: "medium", coverage: 85, factors: [] }, endDate: "2026-09-30T00:00:00Z", url: "https://polymarket.com" },
+  { id: "demo-4", question: "¿Debutará un nuevo álbum en el número uno este mes?", category: "Cultura", probability: .56, volume: 1300000, volume24h: 68000, liquidity: 98000, confidence: { score: 48, level: "low", coverage: 75, factors: [] }, endDate: "2026-08-31T00:00:00Z", url: "https://polymarket.com" }
 ];
 
 const state = { markets: [], search: "", category: "all", sort: "volume", nextOffset: 0, hasMore: false, loading: false };
