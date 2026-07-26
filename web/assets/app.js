@@ -48,20 +48,24 @@ function card(market) {
   const displayedLevel = confidence.coverage < 50 ? "low" : confidence.level;
   const confidenceLabels = { high: "Alta", medium: "Media", low: "Baja" };
   article.innerHTML = `
-    <div class="card-top"><span class="category"></span><span class="date"></span></div>
-    <h3></h3>
-    <div class="probability-row"><div><span>Probabilidad Yes</span><div class="bar"><i></i></div></div><strong></strong></div>
-    <div class="confidence-row"><span>Calidad de señal</span><strong class="confidence"></strong></div>
-    <details class="confidence-details"><summary>Ver cálculo</summary><div class="factor-list"></div><small></small></details>
-    <div class="card-footer">
-      <div class="metric"><span>Volumen</span><strong></strong></div>
-      <div class="metric"><span>Liquidez</span><strong></strong></div>
-      <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket">&#8599;</a>
+    <div class="probability-rail" aria-hidden="true"><i></i><span></span></div>
+    <div class="card-content">
+      <div class="card-top"><span class="category"></span><span class="date"></span></div>
+      <h3></h3>
+      <div class="probability-row"><span>El mercado dice “Sí”</span><strong></strong></div>
+      <div class="confidence-row"><span>Solidez de la señal</span><strong class="confidence"></strong></div>
+      <details class="confidence-details"><summary>Cómo se calcula</summary><div class="factor-list"></div><small></small></details>
+      <div class="card-footer">
+        <div class="metric"><span>Volumen</span><strong></strong></div>
+        <div class="metric"><span>Liquidez</span><strong></strong></div>
+        <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket"><span>Ver mercado</span> &#8599;</a>
+      </div>
     </div>`;
   article.querySelector(".category").textContent = market.category || "Other";
   article.querySelector(".date").textContent = end ? date.format(end) : "Sin fecha";
   article.querySelector("h3").textContent = market.question;
-  article.querySelector(".bar i").style.width = `${probability * 100}%`;
+  article.querySelector(".probability-rail i").style.height = `${probability * 100}%`;
+  article.querySelector(".probability-rail span").style.bottom = `calc(${probability * 100}% - 5px)`;
   article.querySelector(".probability-row strong").textContent = percent.format(probability);
   const confidenceElement = article.querySelector(".confidence");
   confidenceElement.classList.add(`confidence-${displayedLevel}`);

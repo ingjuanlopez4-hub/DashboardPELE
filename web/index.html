@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Panel público de inteligencia de mercados activos de Polymarket.">
-  <meta name="theme-color" content="#eeeadf">
+  <meta name="theme-color" content="#071d2b">
   <title>PELE // Market Intelligence</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
 </head>
@@ -13,41 +14,55 @@
   <a class="skip-link" href="#markets">Saltar a mercados</a>
   <header class="topbar">
     <a class="brand" href="/" aria-label="PELE inicio">
-      <span class="brand-mark" aria-hidden="true">P</span>
-      <span>PELE <small>Market intelligence</small></span>
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>PELE <small>Predictive market radar</small></span>
     </a>
-    <div class="live-indicator" id="data-status" data-state="loading" role="status">
-      <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
+    <div class="topbar-meta">
+      <span class="edition">Gamma / mercados abiertos</span>
+      <div class="live-indicator" id="data-status" data-state="loading" role="status">
+        <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
+      </div>
     </div>
   </header>
 
   <main>
     <section class="hero" aria-labelledby="page-title">
-      <div>
-        <p class="eyebrow">Mercados predictivos / señales en directo</p>
-        <h1 id="page-title">Donde el mercado<br><em>pone su convicción.</em></h1>
+      <div class="hero-copy">
+        <p class="eyebrow">Radar de convicción / Polymarket</p>
+        <h1 id="page-title">Todo mercado<br>acaba en <em>sí</em><br><span>o no.</span></h1>
+        <p class="intro">Lo difícil es saber cuánto creerle. PELE cruza probabilidad, liquidez y actividad para separar una cuota popular de una señal sólida.</p>
+        <a class="hero-link" href="#markets">Explorar mercados <span aria-hidden="true">↓</span></a>
       </div>
-      <p class="intro">Una lectura clara de probabilidad, volumen y liquidez en mercados activos de Polymarket. Análisis público; ninguna operación se ejecuta desde aquí.</p>
+      <div class="probability-scale" aria-label="Escala de probabilidad, desde casi seguro hasta casi imposible">
+        <span class="scale-label scale-top"><b>100</b> Casi seguro</span>
+        <span class="scale-label scale-mid"><b>50</b> Mercado dividido</span>
+        <span class="scale-label scale-bottom"><b>0</b> Casi imposible</span>
+        <span class="scale-line" aria-hidden="true"></span>
+        <span class="scale-marker" aria-hidden="true"><i></i><b>La cuota es una opinión con precio</b></span>
+      </div>
     </section>
 
     <section class="kpis" aria-label="Resumen de mercados">
-      <article><span>Mercados</span><strong id="kpi-count">--</strong><small>en la muestra</small></article>
-      <article><span>Volumen total</span><strong id="kpi-volume">--</strong><small>histórico</small></article>
-      <article><span>Liquidez</span><strong id="kpi-liquidity">--</strong><small>disponible</small></article>
-      <article><span>Prob. media</span><strong id="kpi-probability">--</strong><small>resultado Yes</small></article>
+      <article><span>En radar</span><strong id="kpi-count">--</strong><small>mercados abiertos</small></article>
+      <article><span>Volumen observado</span><strong id="kpi-volume">--</strong><small>acumulado</small></article>
+      <article><span>Capital disponible</span><strong id="kpi-liquidity">--</strong><small>liquidez actual</small></article>
+      <article><span>Consenso medio</span><strong id="kpi-probability">--</strong><small>probabilidad de “Sí”</small></article>
     </section>
 
     <section class="workspace" id="markets" aria-labelledby="markets-title">
       <div class="section-heading">
-        <h2 id="markets-title">Mercados activos</h2>
+        <div>
+          <p class="eyebrow">Señales comparables</p>
+          <h2 id="markets-title">El radar, ahora</h2>
+        </div>
         <p id="result-count" aria-live="polite">Consultando Gamma...</p>
       </div>
 
       <form class="controls" id="filters" role="search">
         <label class="search-field">
-          <span class="control-label">Buscar mercados</span>
+          <span class="control-label">Buscar una pregunta</span>
           <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-          <input id="search" type="search" placeholder="Pregunta o categoría..." autocomplete="off">
+          <input id="search" type="search" placeholder="Bitcoin, elecciones, tipos..." autocomplete="off">
         </label>
         <label><span class="control-label">Categoría</span><select id="category"><option value="all">Todas las categorías</option></select></label>
         <label><span class="control-label">Ordenar por</span><select id="sort">
@@ -64,7 +79,7 @@
         <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       </div>
       <div id="empty" class="empty" hidden>
-        <strong>Sin coincidencias</strong><p>Prueba con otro término o restablece los filtros.</p>
+        <strong>Ese mercado no está en el radar</strong><p>Prueba otra pregunta o vuelve a ver la muestra completa.</p>
         <button id="reset" type="button">Restablecer filtros</button>
       </div>
       <div id="market-grid" class="market-grid" hidden></div>
@@ -74,6 +89,6 @@
     </section>
   </main>
 
-  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Datos públicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a></span></footer>
+  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Lectura informativa, no asesoramiento financiero</span><span>Datos públicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a></span></footer>
 </body>
 </html>
