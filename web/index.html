@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="PELE market intelligence dashboard for active Polymarket markets.">
+  <meta name="description" content="Panel público de inteligencia de mercados activos de Polymarket.">
+  <meta name="theme-color" content="#eeeadf">
   <title>PELE // Market Intelligence</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
@@ -15,21 +16,23 @@
       <span class="brand-mark" aria-hidden="true">P</span>
       <span>PELE <small>Market intelligence</small></span>
     </a>
-    <div class="live-indicator"><span aria-hidden="true"></span> Gamma live</div>
+    <div class="live-indicator" id="data-status" data-state="loading" role="status">
+      <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
+    </div>
   </header>
 
   <main>
     <section class="hero" aria-labelledby="page-title">
       <div>
-        <p class="eyebrow">Prediction markets / live signal board</p>
-        <h1 id="page-title">Donde el mercado<br><em>pone su conviccion.</em></h1>
+        <p class="eyebrow">Mercados predictivos / señales en directo</p>
+        <h1 id="page-title">Donde el mercado<br><em>pone su convicción.</em></h1>
       </div>
-      <p class="intro">Una lectura clara de probabilidad, volumen y liquidez en mercados activos de Polymarket. Analisis publico; ninguna operacion se ejecuta desde aqui.</p>
+      <p class="intro">Una lectura clara de probabilidad, volumen y liquidez en mercados activos de Polymarket. Análisis público; ninguna operación se ejecuta desde aquí.</p>
     </section>
 
     <section class="kpis" aria-label="Resumen de mercados">
       <article><span>Mercados</span><strong id="kpi-count">--</strong><small>en la muestra</small></article>
-      <article><span>Volumen total</span><strong id="kpi-volume">--</strong><small>historico</small></article>
+      <article><span>Volumen total</span><strong id="kpi-volume">--</strong><small>histórico</small></article>
       <article><span>Liquidez</span><strong id="kpi-liquidity">--</strong><small>disponible</small></article>
       <article><span>Prob. media</span><strong id="kpi-probability">--</strong><small>resultado Yes</small></article>
     </section>
@@ -42,17 +45,17 @@
 
       <form class="controls" id="filters" role="search">
         <label class="search-field">
-          <span class="sr-only">Buscar mercados</span>
+          <span class="control-label">Buscar mercados</span>
           <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-          <input id="search" type="search" placeholder="Buscar pregunta o categoria..." autocomplete="off">
+          <input id="search" type="search" placeholder="Pregunta o categoría..." autocomplete="off">
         </label>
-        <label><span class="sr-only">Categoria</span><select id="category"><option value="all">Todas las categorias</option></select></label>
-        <label><span class="sr-only">Ordenar por</span><select id="sort">
+        <label><span class="control-label">Categoría</span><select id="category"><option value="all">Todas las categorías</option></select></label>
+        <label><span class="control-label">Ordenar por</span><select id="sort">
           <option value="volume">Mayor volumen</option>
           <option value="liquidity">Mayor liquidez</option>
           <option value="probability">Mayor probabilidad</option>
-          <option value="confidence">Mayor confianza</option>
-          <option value="date">Fecha mas proxima</option>
+          <option value="confidence">Mejor señal</option>
+          <option value="date">Fecha más próxima</option>
         </select></label>
       </form>
 
@@ -61,13 +64,16 @@
         <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       </div>
       <div id="empty" class="empty" hidden>
-        <strong>Sin coincidencias</strong><p>Prueba con otro termino o restablece los filtros.</p>
+        <strong>Sin coincidencias</strong><p>Prueba con otro término o restablece los filtros.</p>
         <button id="reset" type="button">Restablecer filtros</button>
       </div>
       <div id="market-grid" class="market-grid" hidden></div>
+      <div class="market-actions">
+        <button id="load-more" class="secondary-button" type="button" hidden>Cargar más mercados</button>
+      </div>
     </section>
   </main>
 
-  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Datos publicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a></span></footer>
+  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Datos públicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a></span></footer>
 </body>
 </html>

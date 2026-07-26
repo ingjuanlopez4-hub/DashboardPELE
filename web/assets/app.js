@@ -7,16 +7,18 @@ const DEMO_MARKETS = [
   { id: "demo-4", question: "Will a new album debut at number one this month?", category: "Culture", probability: .56, volume: 1300000, volume24h: 68000, liquidity: 98000, confidence: { score: 48, level: "low", coverage: 75, factors: [] }, endDate: "2026-08-31T00:00:00Z", url: "https://polymarket.com" }
 ];
 
-const state = { markets: [], search: "", category: "all", sort: "volume" };
+const state = { markets: [], search: "", category: "all", sort: "volume", nextOffset: 0, hasMore: false, loading: false };
 const elements = {
   grid: document.querySelector("#market-grid"), loading: document.querySelector("#loading"),
   empty: document.querySelector("#empty"), notice: document.querySelector("#notice"),
   search: document.querySelector("#search"), category: document.querySelector("#category"),
-  sort: document.querySelector("#sort"), count: document.querySelector("#result-count")
+  sort: document.querySelector("#sort"), count: document.querySelector("#result-count"),
+  loadMore: document.querySelector("#load-more"), dataStatus: document.querySelector("#data-status"),
+  dataStatusLabel: document.querySelector("#data-status-label")
 };
 const money = new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 0 });
-const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", year: "numeric" });
+const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
 function safeDate(value) {
   const parsed = new Date(value);
@@ -32,23 +34,29 @@ function updateKpis() {
   document.querySelector("#kpi-probability").textContent = percent.format(average);
 }
 
+function setDataStatus(status, label) {
+  elements.dataStatus.dataset.state = status;
+  elements.dataStatusLabel.textContent = label;
+}
+
 function card(market) {
   const article = document.createElement("article");
   article.className = "market-card";
   const end = safeDate(market.endDate);
   const probability = Math.max(0, Math.min(1, Number(market.probability || 0)));
   const confidence = market.confidence || { score: 0, level: "low", coverage: 0, factors: [] };
+  const displayedLevel = confidence.coverage < 50 ? "low" : confidence.level;
   const confidenceLabels = { high: "Alta", medium: "Media", low: "Baja" };
   article.innerHTML = `
     <div class="card-top"><span class="category"></span><span class="date"></span></div>
     <h3></h3>
     <div class="probability-row"><div><span>Probabilidad Yes</span><div class="bar"><i></i></div></div><strong></strong></div>
-    <div class="confidence-row"><span>Confianza de mercado</span><strong class="confidence"></strong></div>
-    <details class="confidence-details"><summary>Ver calculo</summary><div class="factor-list"></div><small></small></details>
+    <div class="confidence-row"><span>Calidad de señal</span><strong class="confidence"></strong></div>
+    <details class="confidence-details"><summary>Ver cálculo</summary><div class="factor-list"></div><small></small></details>
     <div class="card-footer">
       <div class="metric"><span>Volumen</span><strong></strong></div>
       <div class="metric"><span>Liquidez</span><strong></strong></div>
-      <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket">&#8599;</a>
+      <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket"><span>Ver</span> &#8599;</a>
     </div>`;
   article.querySelector(".category").textContent = market.category || "Other";
   article.querySelector(".date").textContent = end ? date.format(end) : "Sin fecha";
@@ -56,9 +64,9 @@ function card(market) {
   article.querySelector(".bar i").style.width = `${probability * 100}%`;
   article.querySelector(".probability-row strong").textContent = percent.format(probability);
   const confidenceElement = article.querySelector(".confidence");
-  confidenceElement.classList.add(`confidence-${confidence.level}`);
-  confidenceElement.textContent = `${confidenceLabels[confidence.level] || "Baja"} · ${confidence.score}/100`;
-  confidenceElement.setAttribute("aria-label", `Confianza de mercado ${confidence.score} de 100`);
+  confidenceElement.classList.add(`confidence-${displayedLevel}`);
+  confidenceElement.textContent = `${confidenceLabels[displayedLevel] || "Baja"} · ${confidence.score}/100`;
+  confidenceElement.setAttribute("aria-label", `Calidad de señal ${confidence.score} de 100, cobertura ${confidence.coverage}%`);
   const factorList = article.querySelector(".factor-list");
   for (const factor of confidence.factors || []) {
     const item = document.createElement("span");
@@ -95,53 +103,72 @@ function render() {
 }
 
 function populateCategories() {
+  elements.category.replaceChildren(new Option("Todas las categorías", "all"));
   [...new Set(state.markets.map(market => market.category).filter(Boolean))].sort().forEach(value => {
     const option = document.createElement("option");
     option.value = value; option.textContent = value; elements.category.append(option);
   });
+  elements.category.value = [...elements.category.options].some(option => option.value === state.category) ? state.category : "all";
+  state.category = elements.category.value;
 }
 
-async function loadMarkets() {
+function showNotice(message) {
+  const text = document.createElement("span");
+  const retry = document.createElement("button");
+  text.textContent = message;
+  retry.type = "button";
+  retry.textContent = "Reintentar";
+  retry.addEventListener("click", () => loadMarkets({ reset: true }));
+  elements.notice.replaceChildren(text, retry);
+  elements.notice.hidden = false;
+}
+
+async function loadMarkets({ reset = false } = {}) {
+  if (state.loading) return;
+  state.loading = true;
+  elements.loadMore.setAttribute("aria-busy", "true");
+  elements.loadMore.textContent = "Cargando...";
+  if (reset) {
+    state.markets = [];
+    state.nextOffset = 0;
+    state.hasMore = false;
+    elements.notice.hidden = true;
+    elements.loading.hidden = false;
+    setDataStatus("loading", "Conectando");
+  }
   try {
-    const markets = new Map();
-    let offset = 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      const response = await fetch(`/api/markets?limit=100&offset=${offset}`, { headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error(`API ${response.status}`);
-      const payload = await response.json();
-      if (!Array.isArray(payload.markets)) throw new Error("Invalid response");
-
-      const previousSize = markets.size;
-      payload.markets.forEach(market => {
-        const key = market.id || `${market.question}:${market.endDate}`;
-        markets.set(key, market);
-      });
-      state.markets = [...markets.values()];
-      updateKpis();
-      render();
-      elements.loading.hidden = true;
-      elements.count.textContent = `${state.markets.length.toLocaleString("es-ES")} mercados cargados...`;
-
-      hasMore = payload.hasMore === true;
-      offset = Number(payload.nextOffset);
-      if (hasMore && (!Number.isSafeInteger(offset) || offset < 0 || markets.size === previousSize)) {
-        throw new Error("Invalid pagination response");
-      }
-    }
-
+    const response = await fetch(`/api/markets?limit=100&offset=${state.nextOffset}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`API ${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.markets)) throw new Error("Invalid response");
+    const markets = new Map(state.markets.map(market => [market.id || `${market.question}:${market.endDate}`, market]));
+    const previousSize = markets.size;
+    payload.markets.forEach(market => markets.set(market.id || `${market.question}:${market.endDate}`, market));
+    state.markets = [...markets.values()];
+    state.hasMore = payload.hasMore === true;
+    state.nextOffset = Number(payload.nextOffset);
+    if (state.hasMore && (!Number.isSafeInteger(state.nextOffset) || state.nextOffset < 0 || markets.size === previousSize)) throw new Error("Invalid pagination response");
     if (state.markets.length === 0) throw new Error("Empty response");
+    setDataStatus("live", "Datos en directo");
+    elements.notice.hidden = true;
   } catch (error) {
     console.warn("Using demo market fallback:", error);
-    if (state.markets.length === 0) state.markets = DEMO_MARKETS;
-    elements.notice.hidden = false;
-    elements.notice.textContent = state.markets === DEMO_MARKETS
-      ? "Gamma no responde en este momento. Mostramos datos de demostracion para mantener disponible la experiencia."
-      : "La carga de Gamma se interrumpio. Mostramos todos los mercados recuperados hasta ese momento.";
+    if (state.markets.length === 0) {
+      state.markets = DEMO_MARKETS;
+      setDataStatus("demo", "Modo demostración");
+      showNotice("Gamma no responde en este momento. Mostramos datos de demostración.");
+    } else {
+      setDataStatus("partial", "Datos parciales");
+      showNotice("La carga se interrumpió. Conservamos los mercados recuperados.");
+    }
+    state.hasMore = false;
   } finally {
+    state.loading = false;
     elements.loading.hidden = true;
     elements.loading.setAttribute("aria-busy", "false");
+    elements.loadMore.hidden = !state.hasMore;
+    elements.loadMore.removeAttribute("aria-busy");
+    elements.loadMore.textContent = "Cargar más mercados";
     populateCategories(); updateKpis(); render();
   }
 }
@@ -154,5 +181,6 @@ document.querySelector("#reset").addEventListener("click", () => {
   elements.search.value = ""; elements.category.value = "all"; elements.sort.value = "volume"; render();
   elements.search.focus();
 });
+elements.loadMore.addEventListener("click", () => loadMarkets());
 
-loadMarkets();
+loadMarkets({ reset: true });
