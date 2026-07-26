@@ -56,7 +56,7 @@ function card(market) {
     <div class="card-footer">
       <div class="metric"><span>Volumen</span><strong></strong></div>
       <div class="metric"><span>Liquidez</span><strong></strong></div>
-      <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket"><span>Ver</span> &#8599;</a>
+      <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket">&#8599;</a>
     </div>`;
   article.querySelector(".category").textContent = market.category || "Other";
   article.querySelector(".date").textContent = end ? date.format(end) : "Sin fecha";
