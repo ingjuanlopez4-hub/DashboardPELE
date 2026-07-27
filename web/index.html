@@ -64,6 +64,12 @@
       <article><span>Consenso medio</span><strong id="kpi-probability">--</strong><small>probabilidad de “Sí”</small></article>
     </section>
 
+    <aside class="provenance" aria-label="Procedencia de las lecturas">
+      <p><span class="provenance-key market-source">Mercado</span><strong>Precio, volumen y liquidez</strong><small>Publicados por Gamma</small></p>
+      <p><span class="provenance-key model-source">Modelo</span><strong>Solidez de la señal</strong><small>Calculada por PELE</small></p>
+      <p><span class="provenance-key demo-source">Simulación</span><strong>Tendencia, ballenas y EV</strong><small>Ilustrativos hasta conectar histórico</small></p>
+    </aside>
+
     <section class="intelligence" aria-labelledby="intelligence-title">
       <header class="intelligence-heading">
         <div>
@@ -74,14 +80,14 @@
       </header>
       <div class="validation-board">
         <article class="hit-rate">
-          <div class="panel-label"><span>Backtesting de convicción alta</span><small>Simulación ilustrativa · 50 resoluciones</small></div>
-          <div class="hit-rate-main"><strong>92<span>%</span></strong><p>46 de 50 mercados clasificados como “Casi seguro” terminaron en la dirección prevista.</p></div>
+          <div class="panel-label"><span>Prueba de calibración</span><small>Escenario de interfaz · 50 resoluciones sintéticas</small></div>
+          <div class="hit-rate-main"><strong>92<span>%</span></strong><p>En este escenario, 46 de 50 contratos de convicción alta terminaron en la dirección prevista.</p></div>
           <div class="calibration" aria-label="Acierto simulado por nivel de convicción">
             <div><span>Alta</span><i><b style="width:92%"></b></i><strong>92%</strong></div>
             <div><span>Media</span><i><b style="width:71%"></b></i><strong>71%</strong></div>
             <div><span>Baja</span><i><b style="width:54%"></b></i><strong>54%</strong></div>
           </div>
-          <p class="demo-disclaimer">Datos sintéticos para demostrar la experiencia. Conecta el histórico de resoluciones para convertirlos en evidencia auditable.</p>
+          <p class="demo-disclaimer"><strong>No es rendimiento histórico.</strong> Esta simulación demuestra cómo se leerá la calibración al conectar resoluciones auditables.</p>
         </article>
         <aside class="alert-desk" id="alerts" aria-labelledby="alerts-title">
           <div class="panel-label"><span id="alerts-title">Vigilancia inteligente</span><small>Guardada en este navegador</small></div>
@@ -104,7 +110,11 @@
         <p id="result-count" aria-live="polite">Consultando Gamma...</p>
       </div>
 
-      <form class="controls" id="filters" role="search">
+      <button class="filter-toggle" id="filter-toggle" type="button" aria-controls="filters" aria-expanded="false">
+        <span>Filtrar mercados</span><small>5 criterios</small><i aria-hidden="true"></i>
+      </button>
+
+      <form class="controls" id="filters" role="search" data-mobile-collapsed="true">
         <label class="search-field">
           <span class="control-label">Buscar una pregunta</span>
           <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>

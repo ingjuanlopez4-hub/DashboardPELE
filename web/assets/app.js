@@ -24,7 +24,8 @@ const elements = {
   closing: document.querySelector("#closing"), minLiquidity: document.querySelector("#min-liquidity"),
   opportunities: document.querySelector("#opportunities"), loadMore: document.querySelector("#load-more"),
   dataStatus: document.querySelector("#data-status"), dataStatusLabel: document.querySelector("#data-status-label"),
-  alertCount: document.querySelector("#alert-count"), alertDeskCount: document.querySelector("#alert-desk-count")
+  alertCount: document.querySelector("#alert-count"), alertDeskCount: document.querySelector("#alert-desk-count"),
+  filters: document.querySelector("#filters"), filterToggle: document.querySelector("#filter-toggle")
 };
 const money = new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 0 });
@@ -140,15 +141,18 @@ function card(market) {
       <div class="card-top"><span class="category"></span><span class="date"></span></div>
       <h3></h3>
       <div class="probability-row"><span>El mercado dice “Sí”</span><strong></strong></div>
-      <div class="trend-block">
-        <div class="trend-head"><span>Convicción · 24h · demo</span><strong class="trend-change"></strong></div>
-        <svg class="trend-chart" viewBox="0 0 240 54" preserveAspectRatio="none" role="img"><title></title><line class="baseline" x1="0" y1="27" x2="240" y2="27"></line><polyline class="trend-line"></polyline><circle class="trend-dot" r="3.5"></circle></svg>
-      </div>
-      <div class="confidence-row"><span>Solidez de la señal</span><strong class="confidence"></strong></div>
-      <div class="signal-grid">
-        <div><span>Ballenas / retail · demo</span><strong class="whale-share"></strong></div>
-        <div><span>Manipulación · demo</span><strong class="anomaly-risk"></strong></div>
-        <div><span>EV / 1 USDC · demo</span><strong class="edge"></strong></div>
+      <div class="model-readout" aria-label="Lecturas derivadas y simuladas">
+        <div class="readout-label"><span>Lectura PELE</span><small>Modelo + simulación</small></div>
+        <div class="trend-block">
+          <div class="trend-head"><span>Convicción · 24h</span><strong class="trend-change"></strong></div>
+          <svg class="trend-chart" viewBox="0 0 240 54" preserveAspectRatio="none" role="img"><title></title><line class="baseline" x1="0" y1="27" x2="240" y2="27"></line><polyline class="trend-line"></polyline><circle class="trend-dot" r="3.5"></circle></svg>
+        </div>
+        <div class="confidence-row"><span>Solidez de la señal</span><strong class="confidence"></strong></div>
+        <div class="signal-grid">
+          <div><span>Ballenas / retail</span><strong class="whale-share"></strong></div>
+          <div><span>Manipulación</span><strong class="anomaly-risk"></strong></div>
+          <div><span>EV / 1 USDC</span><strong class="edge"></strong></div>
+        </div>
       </div>
       <details class="confidence-details"><summary>Cómo se calcula</summary><div class="factor-list"></div><small></small></details>
       <details class="market-intelligence">
@@ -356,6 +360,11 @@ document.querySelector("#reset").addEventListener("click", () => {
   elements.search.focus();
 });
 elements.loadMore.addEventListener("click", () => loadMarkets());
+elements.filterToggle.addEventListener("click", () => {
+  const expanded = elements.filterToggle.getAttribute("aria-expanded") !== "true";
+  elements.filterToggle.setAttribute("aria-expanded", String(expanded));
+  elements.filters.dataset.mobileCollapsed = String(!expanded);
+});
 
 persistAlerts();
 loadMarkets({ reset: true });
