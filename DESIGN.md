@@ -15,29 +15,49 @@ colors:
   cautela-terrosa: "#8a5b00"
   riesgo-ladrillo: "#a43b25"
 typography:
+  weights:
+    regular: 400
+    semibold: 600
+    bold: 700
   display:
-    fontFamily: "Nimbus Sans Narrow, Arial Narrow, Arial, sans-serif"
-    fontSize: "clamp(4.1rem, 8.8vw, 9rem)"
-    fontWeight: 900
-    lineHeight: 0.78
-    letterSpacing: "-0.035em"
+    fontFamily: "League Gothic, Arial Narrow, Arial, sans-serif"
+    fontSize: "clamp(5.2rem, 9.6vw, 10rem)"
+    fontWeight: 400
+    lineHeight: 0.74
+    letterSpacing: "-0.018em"
   headline:
-    fontFamily: "Nimbus Sans Narrow, Arial Narrow, Arial, sans-serif"
+    fontFamily: "League Gothic, Arial Narrow, Arial, sans-serif"
     fontSize: "clamp(3rem, 6vw, 6rem)"
-    fontWeight: 900
-    lineHeight: 0.85
+    fontWeight: 400
+    lineHeight: 0.82
     letterSpacing: "-0.025em"
+  title:
+    fontFamily: "Instrument Sans, Arial, Helvetica, sans-serif"
+    fontSize: "clamp(1.15rem, 1.55vw, 1.375rem)"
+    fontWeight: 700
+    lineHeight: 1.23
+    letterSpacing: "-0.015em"
   body:
-    fontFamily: "Arial, Helvetica, sans-serif"
+    fontFamily: "Instrument Sans, Arial, Helvetica, sans-serif"
     fontSize: "1rem"
     fontWeight: 400
     lineHeight: 1.55
+  body-sm:
+    fontFamily: "Instrument Sans, Arial, Helvetica, sans-serif"
+    fontSize: "0.875rem"
+    fontWeight: 400
+    lineHeight: 1.5
   label:
-    fontFamily: "Courier New, Courier, monospace"
-    fontSize: "0.62rem"
+    fontFamily: "IBM Plex Mono, Courier New, monospace"
+    fontSize: "0.75rem"
     fontWeight: 700
     lineHeight: 1.35
-    letterSpacing: "0.1em"
+    letterSpacing: "0.08em"
+  label-xs:
+    fontFamily: "IBM Plex Mono, Courier New, monospace"
+    fontSize: "0.6875rem"
+    fontWeight: 400
+    lineHeight: 1.35
 rounded:
   square: "0"
   status-dot: "50%"
@@ -121,20 +141,22 @@ La paleta enfrenta una base fría y técnica con dos señales cálidas y eléctr
 
 ## Typography
 
-**Display Font:** Nimbus Sans Narrow, con Arial Narrow y Arial como respaldo.
+**Display Font:** League Gothic, con Arial Narrow y Arial como respaldo.
 
-**Body Font:** Arial, con Helvetica y sans-serif como respaldo.
+**Body Font:** Instrument Sans, con Arial, Helvetica y sans-serif como respaldo.
 
-**Label/Mono Font:** Courier New, con Courier y monospace como respaldo.
+**Label/Mono Font:** IBM Plex Mono, con Courier New y monospace como respaldo.
 
 **Character:** La combinación une titulares condensados de alta presión con texto funcional neutral y una capa monoespaciada que hace que fechas, estados y métricas parezcan instrumentos, no subtítulos decorativos.
 
 ### Hierarchy
-- **Display:** peso negro, escala fluida y línea muy compacta; solo para la tesis principal del hero.
-- **Headline:** peso negro y caja alta; abre secciones y estados vacíos con impacto editorial.
+- **Display:** peso regular condensado, escala fluida y línea muy compacta; solo para la tesis principal del hero.
+- **Headline:** peso regular condensado y caja alta; abre secciones y estados vacíos con impacto editorial.
 - **Title:** texto de tarjeta en negrita, tamaño moderado y línea compacta; prioriza la pregunta del mercado.
 - **Body:** peso regular y línea abierta; explica el producto y los detalles de confianza.
-- **Label:** monoespaciada, negrita, pequeña, espaciada y normalmente en mayúsculas; identifica controles, métricas y estados.
+- **Body Small:** texto auxiliar de 14px; nunca sustituye el cuerpo principal.
+- **Label:** monoespaciada de 12px, negrita, espaciada y normalmente en mayúsculas; identifica controles, métricas y estados.
+- **Label XS:** monoespaciada de 11px y peso regular; se reserva a procedencia y metadatos secundarios, nunca a controles o acciones.
 
 ### Named Rules
 

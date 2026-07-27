@@ -20,8 +20,11 @@
     "typographyMeta": {
       "display": { "displayName": "Display", "purpose": "Tesis principal del hero y cifras monumentales." },
       "headline": { "displayName": "Headline", "purpose": "Aperturas de sección y estados editoriales." },
-      "body": { "displayName": "Body", "purpose": "Explicación funcional y contenido de lectura." },
-      "label": { "displayName": "Instrument Label", "purpose": "Metadatos, controles, fechas, estados y métricas." }
+      "title": { "displayName": "Title", "purpose": "Preguntas de mercado y títulos de tarjeta." },
+      "body": { "displayName": "Body", "purpose": "Explicación funcional y contenido de lectura a 16px." },
+      "body-sm": { "displayName": "Body Small", "purpose": "Texto auxiliar legible a 14px." },
+      "label": { "displayName": "Instrument Label", "purpose": "Controles, estados y métricas funcionales a 12px." },
+      "label-xs": { "displayName": "Instrument Metadata", "purpose": "Procedencia y metadatos secundarios a 11px." }
     },
     "shadows": [
       { "name": "panel-offset", "value": "7px 7px 0 #dce7ea", "purpose": "Separación estructural del bloque de controles." },
@@ -46,7 +49,7 @@
       "refersTo": "button-primary",
       "description": "Acción rectangular de alta autoridad para continuar o restablecer.",
       "html": "<button class=\"ds-btn-primary\">CARGAR MÁS MERCADOS</button>",
-      "css": ".ds-btn-primary { min-height: 48px; padding: 0 1.2rem; color: var(--white, #fff); background: var(--deep, #071d2b); border: 1px solid var(--deep, #071d2b); border-radius: 0; font: 800 1rem Arial, sans-serif; transition: background .2s ease, color .2s ease, border-color .2s ease; } .ds-btn-primary:hover { color: var(--deep, #071d2b); background: var(--amber, #ffb000); border-color: var(--amber, #ffb000); } .ds-btn-primary:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; } .ds-btn-primary:active { transform: translateY(1px); }"
+      "css": ".ds-btn-primary { min-height: 48px; padding: 0 1.2rem; color: var(--white, #fff); background: var(--deep, #071d2b); border: 1px solid var(--deep, #071d2b); border-radius: 0; font: 700 1rem/1.55 'Instrument Sans', Arial, sans-serif; transition: background .2s ease, color .2s ease, border-color .2s ease; } .ds-btn-primary:hover { color: var(--deep, #071d2b); background: var(--amber, #ffb000); border-color: var(--amber, #ffb000); } .ds-btn-primary:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; } .ds-btn-primary:active { transform: translateY(1px); }"
     },
     {
       "name": "Search Field",
@@ -54,14 +57,14 @@
       "refersTo": "input-default",
       "description": "Campo claro y rectangular con etiqueta instrumental.",
       "html": "<label class=\"ds-field\"><span>BUSCAR UNA PREGUNTA</span><input type=\"search\" placeholder=\"Bitcoin, elecciones, tipos...\"></label>",
-      "css": ".ds-field { display: grid; gap: .5rem; color: var(--muted, #647985); font: 700 .62rem/1.35 'Courier New', monospace; letter-spacing: .11em; } .ds-field input { width: 100%; min-height: 48px; padding: 0 .9rem; color: var(--ink, #102a39); background: var(--ice, #f2f7f8); border: 1px solid transparent; border-radius: 0; font: 400 1rem Arial, sans-serif; transition: background .2s ease, border-color .2s ease; } .ds-field input:hover { background: var(--white, #fff); border-color: #8da6b0; } .ds-field input:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
+      "css": ".ds-field { display: grid; gap: .5rem; color: var(--muted, #647985); font: 700 .75rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .08em; } .ds-field input { width: 100%; min-height: 48px; padding: 0 .9rem; color: var(--ink, #102a39); background: var(--ice, #f2f7f8); border: 1px solid transparent; border-radius: 0; font: 400 1rem/1.55 'Instrument Sans', Arial, sans-serif; transition: background .2s ease, border-color .2s ease; } .ds-field input:hover { background: var(--white, #fff); border-color: #8da6b0; } .ds-field input:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
     },
     {
       "name": "Category Chip",
       "kind": "chip",
       "description": "Etiqueta compacta para clasificar una señal sin competir con sus métricas.",
       "html": "<span class=\"ds-category\">ECONOMÍA</span>",
-      "css": ".ds-category { display: inline-block; padding: .3rem .45rem; color: #0c6073; background: #e1f1f3; border-radius: 0; font: 700 .62rem 'Courier New', monospace; letter-spacing: .08em; text-transform: uppercase; }"
+      "css": ".ds-category { display: inline-block; padding: .3rem .45rem; color: #0c6073; background: #e1f1f3; border-radius: 0; font: 700 .6875rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .08em; text-transform: uppercase; }"
     },
     {
       "name": "Market Card",
@@ -69,21 +72,21 @@
       "refersTo": "card-market",
       "description": "Unidad principal de comparación con riel de probabilidad, pregunta y métricas.",
       "html": "<article class=\"ds-market-card\"><i></i><div><span class=\"ds-card-label\">ECONOMÍA</span><h3>¿Recortará tipos la Reserva Federal?</h3><p>EL MERCADO DICE ‘SÍ’ <strong>67%</strong></p></div></article>",
-      "css": ".ds-market-card { min-height: 280px; display: grid; grid-template-columns: 19px 1fr; color: var(--ink, #102a39); background: var(--white, #fff); border: 1px solid var(--line, #c9d7dc); border-radius: 0; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; } .ds-market-card > i { background: linear-gradient(to top, var(--cyan, #58c5d6) 67%, #dce8eb 67%); border-right: 1px solid var(--line, #c9d7dc); } .ds-market-card > div { padding: 1.25rem; } .ds-market-card h3 { margin: 1.35rem 0 4rem; color: var(--deep, #071d2b); font: 700 1.35rem/1.23 Arial, sans-serif; } .ds-market-card p { display: flex; align-items: end; justify-content: space-between; color: var(--muted, #647985); font: 700 .61rem/1.35 'Courier New', monospace; letter-spacing: .08em; } .ds-market-card strong { color: var(--blueprint, #0d3852); font: 700 3.2rem/.8 'Arial Narrow', Arial, sans-serif; } .ds-card-label { padding: .3rem .45rem; color: #0c6073; background: #e1f1f3; font: 700 .62rem 'Courier New', monospace; } .ds-market-card:hover { transform: translateY(-3px); border-color: #91a8b2; box-shadow: 8px 8px 0 #dce7ea; } .ds-market-card:focus-within { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
+      "css": ".ds-market-card { min-height: 280px; display: grid; grid-template-columns: 19px 1fr; color: var(--ink, #102a39); background: var(--white, #fff); border: 1px solid var(--line, #c9d7dc); border-radius: 0; transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; } .ds-market-card > i { background: linear-gradient(to top, var(--cyan, #58c5d6) 67%, #dce8eb 67%); border-right: 1px solid var(--line, #c9d7dc); } .ds-market-card > div { padding: 1.25rem; } .ds-market-card h3 { margin: 1.35rem 0 4rem; color: var(--deep, #071d2b); font: 700 1.375rem/1.23 'Instrument Sans', Arial, sans-serif; } .ds-market-card p { display: flex; align-items: end; justify-content: space-between; color: var(--muted, #647985); font: 700 .6875rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .08em; } .ds-market-card strong { color: var(--blueprint, #0d3852); font: 400 3.7rem/.8 'League Gothic', 'Arial Narrow', sans-serif; } .ds-card-label { padding: .3rem .45rem; color: #0c6073; background: #e1f1f3; font: 700 .6875rem/1.35 'IBM Plex Mono', monospace; } .ds-market-card:hover { transform: translateY(-3px); border-color: #91a8b2; box-shadow: 8px 8px 0 #dce7ea; } .ds-market-card:focus-within { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
     },
     {
       "name": "Top Navigation",
       "kind": "nav",
       "description": "Marco oscuro con identidad a la izquierda y telemetría a la derecha.",
       "html": "<nav class=\"ds-nav\"><strong>PELE <small>PREDICTIVE MARKET RADAR</small></strong><span><i></i> DATOS EN DIRECTO</span></nav>",
-      "css": ".ds-nav { min-height: 74px; padding: .75rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; color: var(--white, #fff); background: var(--deep, #071d2b); border-bottom: 1px solid rgba(255,255,255,.16); } .ds-nav strong { font: 800 1rem/1 Arial, sans-serif; letter-spacing: .08em; } .ds-nav small { display: block; margin-top: .25rem; color: #8da8b6; font: 700 .6rem/1 'Courier New', monospace; letter-spacing: .16em; } .ds-nav span { display: flex; align-items: center; gap: .55rem; color: #bdd0d8; font: 700 .65rem 'Courier New', monospace; letter-spacing: .1em; } .ds-nav i { width: 8px; height: 8px; background: var(--cyan, #58c5d6); border-radius: 50%; box-shadow: 0 0 0 4px rgba(88,197,214,.16); } .ds-nav:focus-within { outline: 3px solid var(--amber, #ffb000); outline-offset: -3px; }"
+      "css": ".ds-nav { min-height: 74px; padding: .75rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; color: var(--white, #fff); background: var(--deep, #071d2b); border-bottom: 1px solid rgba(255,255,255,.16); } .ds-nav strong { font: 700 1rem/1 'Instrument Sans', Arial, sans-serif; letter-spacing: .08em; } .ds-nav small { display: block; margin-top: .25rem; color: #8da8b6; font: 400 .6875rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .14em; } .ds-nav span { display: flex; align-items: center; gap: .55rem; color: #bdd0d8; font: 400 .6875rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .08em; } .ds-nav i { width: 8px; height: 8px; background: var(--cyan, #58c5d6); border-radius: 50%; box-shadow: 0 0 0 4px rgba(88,197,214,.16); } .ds-nav:focus-within { outline: 3px solid var(--amber, #ffb000); outline-offset: -3px; }"
     },
     {
       "name": "Live Status",
       "kind": "custom",
       "description": "Indicador compacto que diferencia datos en directo, demo y carga.",
       "html": "<span class=\"ds-live\"><i></i> DATOS EN DIRECTO</span>",
-      "css": ".ds-live { display: inline-flex; align-items: center; gap: .55rem; color: #bdd0d8; background: var(--deep, #071d2b); padding: .75rem 1rem; font: 700 .65rem 'Courier New', monospace; letter-spacing: .1em; } .ds-live i { width: 8px; height: 8px; background: var(--cyan, #58c5d6); border-radius: 50%; box-shadow: 0 0 0 4px rgba(88,197,214,.16); } .ds-live:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
+      "css": ".ds-live { display: inline-flex; align-items: center; gap: .55rem; color: #bdd0d8; background: var(--deep, #071d2b); padding: .75rem 1rem; font: 400 .6875rem/1.35 'IBM Plex Mono', monospace; letter-spacing: .08em; } .ds-live i { width: 8px; height: 8px; background: var(--cyan, #58c5d6); border-radius: 50%; box-shadow: 0 0 0 4px rgba(88,197,214,.16); } .ds-live:focus-visible { outline: 3px solid var(--amber, #ffb000); outline-offset: 4px; }"
     }
   ],
   "narrative": {
