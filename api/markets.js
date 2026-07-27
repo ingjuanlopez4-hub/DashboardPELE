@@ -39,10 +39,12 @@ async function marketsHandler(request, response) {
     const { limit, offset } = parsePagination(request.url);
     const markets = await fetchMarkets(limit, offset);
     const hasMore = markets.length === limit;
+    const dataAsOf = markets.map(market => market.updatedAt).filter(Boolean).sort().at(-1) || null;
     return send(response, 200, {
       markets,
       count: markets.length,
       source: "gamma",
+      dataAsOf,
       offset,
       hasMore,
       nextOffset: hasMore ? offset + markets.length : null

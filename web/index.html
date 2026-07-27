@@ -67,7 +67,7 @@
     <aside class="provenance" aria-label="Procedencia de las lecturas">
       <p><span class="provenance-key market-source">Mercado</span><strong>Precio, volumen y liquidez</strong><small>Publicados por Gamma</small></p>
       <p><span class="provenance-key model-source">Modelo</span><strong>Solidez de la señal</strong><small>Calculada por PELE</small></p>
-      <p><span class="provenance-key demo-source">Simulación</span><strong>Tendencia, ballenas y EV</strong><small>Ilustrativos hasta conectar histórico</small></p>
+      <p><span class="provenance-key derived-source">Derivado</span><strong>Tendencia y presión de actividad</strong><small>Calculadas con métricas públicas de Gamma</small></p>
     </aside>
 
     <section class="intelligence" aria-labelledby="intelligence-title">
@@ -80,14 +80,14 @@
       </header>
       <div class="validation-board">
         <article class="hit-rate">
-          <div class="panel-label"><span>Prueba de calibración</span><small>Escenario de interfaz · 50 resoluciones sintéticas</small></div>
-          <div class="hit-rate-main"><strong>92<span>%</span></strong><p>En este escenario, 46 de 50 contratos de convicción alta terminaron en la dirección prevista.</p></div>
-          <div class="calibration" aria-label="Acierto simulado por nivel de convicción">
-            <div><span>Alta</span><i><b style="width:92%"></b></i><strong>92%</strong></div>
-            <div><span>Media</span><i><b style="width:71%"></b></i><strong>71%</strong></div>
-            <div><span>Baja</span><i><b style="width:54%"></b></i><strong>54%</strong></div>
+          <div class="panel-label"><span>Cobertura de mercado</span><small>Muestra viva recuperada de Gamma</small></div>
+          <div class="hit-rate-main"><strong id="coverage-rate">--<span>%</span></strong><p id="coverage-copy">Esperando métricas observables de los contratos.</p></div>
+          <div class="calibration" aria-label="Distribución de solidez de la señal">
+            <div><span>Alta</span><i><b id="confidence-high-bar" style="width:0"></b></i><strong id="confidence-high">--</strong></div>
+            <div><span>Media</span><i><b id="confidence-medium-bar" style="width:0"></b></i><strong id="confidence-medium">--</strong></div>
+            <div><span>Baja</span><i><b id="confidence-low-bar" style="width:0"></b></i><strong id="confidence-low">--</strong></div>
           </div>
-          <p class="demo-disclaimer"><strong>No es rendimiento histórico.</strong> Esta simulación demuestra cómo se leerá la calibración al conectar resoluciones auditables.</p>
+          <p class="demo-disclaimer"><strong>Lectura descriptiva.</strong> La solidez mide calidad del precio, no acierto futuro ni rendimiento de inversión.</p>
         </article>
         <aside class="alert-desk" id="alerts" aria-labelledby="alerts-title">
           <div class="panel-label"><span id="alerts-title">Vigilancia inteligente</span><small>Guardada en este navegador</small></div>
@@ -95,7 +95,7 @@
           <p>Activa una alerta desde cualquier expediente para seguir cambios de categoría, picos de actividad o nuevas oportunidades.</p>
           <div class="alert-events" id="alert-events" aria-live="polite"><span>Sin eventos evaluados.</span></div>
           <div class="alert-rules" aria-label="Reglas de alerta disponibles">
-            <span>Cambio de convicción</span><span>Pico de volumen</span><span>EV &gt; 8%</span>
+            <span>Cambio de precio</span><span>Presión de actividad</span><span>Spread observable</span>
           </div>
         </aside>
       </div>
@@ -140,7 +140,7 @@
           <option value="confidence">Mejor señal</option>
           <option value="date">Fecha más próxima</option>
         </select></label>
-        <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Modo oportunidad</b><small>Solo valor esperado ≥ 8%</small></span></label>
+        <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Actividad inusual</b><small>Presión observada ≥ 70/100</small></span></label>
       </form>
 
       <div id="notice" class="notice" hidden role="status"></div>

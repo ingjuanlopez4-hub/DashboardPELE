@@ -1,11 +1,6 @@
 "use strict";
 
-const DEMO_MARKETS = [
-  { id: "demo-1", question: "¿Cotizará Bitcoin por encima de 150.000 $ antes de 2027?", category: "Cripto", probability: .42, volume: 18400000, volume24h: 520000, liquidity: 840000, confidence: { score: 86, level: "high", coverage: 100, factors: [] }, endDate: "2026-12-31T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-2", question: "¿Recortará tipos la Reserva Federal en su próxima reunión?", category: "Economía", probability: .67, volume: 7200000, volume24h: 310000, liquidity: 460000, confidence: { score: 78, level: "high", coverage: 100, factors: [] }, endDate: "2026-09-16T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-3", question: "¿Liderará un modelo de IA las listas mundiales de aplicaciones este trimestre?", category: "Tecnología", probability: .31, volume: 2900000, volume24h: 94000, liquidity: 175000, confidence: { score: 61, level: "medium", coverage: 85, factors: [] }, endDate: "2026-09-30T00:00:00Z", url: "https://polymarket.com" },
-  { id: "demo-4", question: "¿Debutará un nuevo álbum en el número uno este mes?", category: "Cultura", probability: .56, volume: 1300000, volume24h: 68000, liquidity: 98000, confidence: { score: 48, level: "low", coverage: 75, factors: [] }, endDate: "2026-08-31T00:00:00Z", url: "https://polymarket.com" }
-];
+const PAGE_SIZE = 10;
 
 const storedAlerts = (() => {
   try { return new Set(JSON.parse(localStorage.getItem("pele-alerts") || "[]")); }
@@ -32,56 +27,13 @@ const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFracti
 const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 
 function safeDate(value) {
+  if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function clamp(value, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function hash(value) {
-  let result = 2166136261;
-  for (const character of String(value)) {
-    result ^= character.charCodeAt(0);
-    result = Math.imul(result, 16777619);
-  }
-  return result >>> 0;
-}
-
-function enrichMarket(market) {
-  const seed = hash(market.id || `${market.question}:${market.endDate}`);
-  const probability = clamp(Number(market.probability || 0));
-  const reportedChange = Number(market.priceChange24h);
-  const change24h = Number.isFinite(reportedChange) ? reportedChange : ((seed % 1901) - 950) / 10000;
-  let random = seed || 1;
-  const points = Array.from({ length: 12 }, (_, index) => {
-    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
-    const progress = index / 11;
-    const noise = ((random / 4294967295) - .5) * .035;
-    return clamp(probability - change24h * (1 - progress) + noise * Math.sin(progress * Math.PI));
-  });
-  points[points.length - 1] = probability;
-  const whaleShare = 32 + seed % 59;
-  const activityRatio = Number(market.volume24h || 0) / Math.max(Number(market.liquidity || 0), 1);
-  const anomalyScore = Math.round(clamp((whaleShare - 35) / 65 * .65 + activityRatio * .35) * 100);
-  const risk = anomalyScore >= 68 ? "high" : anomalyScore >= 42 ? "medium" : "low";
-  const external = clamp(probability + (((seed >> 8) % 2101) - 1050) / 10000);
-  const personal = clamp(probability + (((seed >> 16) % 2601) - 800) / 10000);
-  const cost = Math.max(Number(market.spread || 0), .012);
-  const edge = personal / Math.max(probability, .01) - 1 - cost / Math.max(probability, .01);
-  const externalSource = /polit/i.test(market.category) ? "Encuestas" : /sport|deport/i.test(market.category)
-    ? "Casas tradicionales" : /econom/i.test(market.category) ? "Referencia macro" : "Índice externo";
-  const direction = change24h >= 0 ? "subió" : "bajó";
-  const catalyst = activityRatio > .6 ? "un pico de actividad" : whaleShare > 72
-    ? "una concentración inusual de capital" : "un reajuste gradual del consenso";
-  return {
-    ...market,
-    intelligence: {
-      points, change24h, whaleShare, anomalyScore, risk, external, externalSource, personal, edge,
-      explanation: `La probabilidad ${direction} ${percent.format(Math.abs(change24h))} tras ${catalyst}. No hay una fuente causal verificada conectada; esta lectura es algorítmica.`
-    }
-  };
 }
 
 function persistAlerts() {
@@ -93,9 +45,9 @@ function persistAlerts() {
   const eventDesk = document.querySelector("#alert-events");
   const events = state.markets.filter(market => state.alerts.has(String(market.id || `${market.question}:${market.endDate}`))).map(market => {
     const triggers = [];
-    if (Math.abs(market.intelligence.change24h) >= .05) triggers.push("cambio de convicción");
-    if (market.intelligence.anomalyScore >= 68) triggers.push("actividad anómala");
-    if (market.intelligence.edge >= .08) triggers.push("EV superior a 8%");
+    if (market.intelligence.change24h !== null && Math.abs(market.intelligence.change24h) >= .05) triggers.push("cambio de precio");
+    if (market.intelligence.activityScore >= 70) triggers.push("presión de actividad");
+    if (market.spread !== null && market.spread >= .05) triggers.push("spread amplio");
     const item = document.createElement("span");
     item.dataset.triggered = String(triggers.length > 0);
     item.textContent = `${triggers.length ? "Disparo" : "Vigilando"}: ${market.question.slice(0, 48)}${market.question.length > 48 ? "…" : ""}${triggers.length ? ` · ${triggers.join(" + ")}` : ""}`;
@@ -119,6 +71,16 @@ function updateKpis() {
   document.querySelector("#verdict-yes").textContent = `${yes}%`;
   document.querySelector("#verdict-no").textContent = `${100 - yes}%`;
   verdict.setAttribute("aria-label", `Consenso agregado: Sí ${yes}%, No ${100 - yes}%`);
+  const covered = state.markets.filter(market => market.intelligence?.change24h !== null).length;
+  const coverage = state.markets.length ? Math.round(covered / state.markets.length * 100) : 0;
+  document.querySelector("#coverage-rate").innerHTML = `${coverage}<span>%</span>`;
+  document.querySelector("#coverage-copy").textContent = `${covered} de ${state.markets.length} contratos incluyen variación de precio de 24h publicada por Gamma.`;
+  for (const level of ["high", "medium", "low"]) {
+    const count = state.markets.filter(market => market.confidence?.level === level).length;
+    const share = state.markets.length ? count / state.markets.length * 100 : 0;
+    document.querySelector(`#confidence-${level}`).textContent = count.toLocaleString("es-ES");
+    document.querySelector(`#confidence-${level}-bar`).style.width = `${share}%`;
+  }
 }
 
 function setDataStatus(status, label) {
@@ -141,17 +103,17 @@ function card(market) {
       <div class="card-top"><span class="category"></span><span class="date"></span></div>
       <h3></h3>
       <div class="probability-row"><span>El mercado dice “Sí”</span><strong></strong></div>
-      <div class="model-readout" aria-label="Lecturas derivadas y simuladas">
-        <div class="readout-label"><span>Lectura PELE</span><small>Modelo + simulación</small></div>
+      <div class="model-readout" aria-label="Lecturas derivadas de datos de mercado">
+        <div class="readout-label"><span>Lectura PELE</span><small>Datos Gamma + cálculo</small></div>
         <div class="trend-block">
           <div class="trend-head"><span>Convicción · 24h</span><strong class="trend-change"></strong></div>
           <svg class="trend-chart" viewBox="0 0 240 54" preserveAspectRatio="none" role="img"><title></title><line class="baseline" x1="0" y1="27" x2="240" y2="27"></line><polyline class="trend-line"></polyline><circle class="trend-dot" r="3.5"></circle></svg>
         </div>
         <div class="confidence-row"><span>Solidez de la señal</span><strong class="confidence"></strong></div>
         <div class="signal-grid">
-          <div><span>Ballenas / retail</span><strong class="whale-share"></strong></div>
-          <div><span>Manipulación</span><strong class="anomaly-risk"></strong></div>
-          <div><span>EV / 1 USDC</span><strong class="edge"></strong></div>
+          <div><span>Rotación 24h</span><strong class="activity-ratio"></strong></div>
+          <div><span>Presión actividad</span><strong class="activity-pressure"></strong></div>
+          <div><span>Spread</span><strong class="spread"></strong></div>
         </div>
       </div>
       <details class="confidence-details"><summary>Cómo se calcula</summary><div class="factor-list"></div><small></small></details>
@@ -160,7 +122,7 @@ function card(market) {
         <div class="intelligence-detail">
           <div class="comparison-row">
             <div><span>Polymarket</span><strong class="market-comparison"></strong></div>
-            <div><span class="external-source"></span><strong class="external-comparison"></strong></div>
+            <div><span>Bid / ask</span><strong class="book-comparison"></strong></div>
           </div>
           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
           <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge"></strong></label>
@@ -181,19 +143,27 @@ function card(market) {
   article.querySelector(".probability-rail span").style.bottom = `calc(${probability * 100}% - 5px)`;
   article.querySelector(".probability-row strong").textContent = percent.format(probability);
   const trendChange = article.querySelector(".trend-change");
-  trendChange.textContent = `${intelligence.change24h >= 0 ? "+" : "−"}${percent.format(Math.abs(intelligence.change24h))}`;
-  trendChange.classList.toggle("down", intelligence.change24h < 0);
+  const hasDailyChange = intelligence.change24h !== null;
+  trendChange.textContent = hasDailyChange
+    ? `${intelligence.change24h >= 0 ? "+" : "−"}${percent.format(Math.abs(intelligence.change24h))}`
+    : "Sin dato";
+  trendChange.classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
   const chart = article.querySelector(".trend-chart");
-  const chartOrigin = intelligence.points[0];
-  const chartPoints = intelligence.points.map((value, index) => {
-    const y = Math.max(4, Math.min(50, 27 - (value - chartOrigin) / .2 * 42));
-    return `${index / (intelligence.points.length - 1) * 240},${y}`;
+  const observedPoints = intelligence.points || [{ hoursAgo: 0, probability }];
+  const chartOrigin = observedPoints[0].probability;
+  const chartPoints = observedPoints.map((point, index) => {
+    const y = Math.max(4, Math.min(50, 27 - (point.probability - chartOrigin) / .2 * 42));
+    const x = observedPoints.length === 1 ? 0 : index / (observedPoints.length - 1) * 240;
+    return `${x},${y}`;
   });
+  if (chartPoints.length === 1) chartPoints.push(`240,${chartPoints[0].split(",")[1]}`);
   chart.querySelector("polyline").setAttribute("points", chartPoints.join(" "));
   const [lastX, lastY] = chartPoints[chartPoints.length - 1].split(",");
   chart.querySelector("circle").setAttribute("cx", lastX);
   chart.querySelector("circle").setAttribute("cy", lastY);
-  chart.querySelector("title").textContent = `La convicción cambió ${percent.format(intelligence.change24h)} en 24 horas`;
+  chart.querySelector("title").textContent = hasDailyChange
+    ? `El precio cambió ${percent.format(intelligence.change24h)} en 24 horas`
+    : "Gamma no publicó una variación de 24 horas para este mercado";
   const confidenceElement = article.querySelector(".confidence");
   confidenceElement.classList.add(`confidence-${displayedLevel}`);
   confidenceElement.textContent = `${confidenceLabels[displayedLevel] || "Baja"} · ${confidence.score}/100`;
@@ -204,26 +174,31 @@ function card(market) {
     item.textContent = `${factor.label} ${factor.score}/100`;
     factorList.append(item);
   }
-  if (!factorList.children.length) factorList.textContent = "Detalle no disponible en datos demo.";
+  if (!factorList.children.length) factorList.textContent = "Gamma no publicó factores suficientes.";
   article.querySelector(".confidence-details small").textContent = `Cobertura de datos: ${confidence.coverage}%`;
-  article.querySelector(".whale-share").textContent = `${intelligence.whaleShare} / ${100 - intelligence.whaleShare}%`;
-  const riskLabels = { high: "Alto", medium: "Medio", low: "Bajo" };
-  const anomaly = article.querySelector(".anomaly-risk");
-  anomaly.textContent = `${riskLabels[intelligence.risk]} · ${intelligence.anomalyScore}`;
-  anomaly.classList.add(`risk-${intelligence.risk}`);
-  const edge = article.querySelector(".edge");
-  edge.textContent = `${intelligence.edge >= 0 ? "+" : "−"}${money.format(Math.abs(intelligence.edge))}`;
-  edge.classList.add(intelligence.edge >= 0 ? "edge-positive" : "edge-negative");
+  article.querySelector(".activity-ratio").textContent = intelligence.activityRatio === null ? "Sin dato" : `${intelligence.activityRatio.toFixed(1)}×`;
+  const activityLabels = { high: "Alta", medium: "Media", low: "Baja", unknown: "Sin dato" };
+  const activity = article.querySelector(".activity-pressure");
+  activity.textContent = intelligence.activityScore === null ? "Sin dato" : `${activityLabels[intelligence.activityLevel]} · ${intelligence.activityScore}`;
+  activity.classList.add(`risk-${intelligence.activityLevel}`);
+  article.querySelector(".spread").textContent = market.spread === null ? "Sin dato" : percent.format(market.spread);
   article.querySelector(".market-comparison").textContent = percent.format(probability);
-  article.querySelector(".external-source").textContent = `${intelligence.externalSource} · demo`;
-  article.querySelector(".external-comparison").textContent = percent.format(intelligence.external);
+  article.querySelector(".book-comparison").textContent = market.bestBid === null || market.bestAsk === null
+    ? "Sin dato"
+    : `${percent.format(market.bestBid)} / ${percent.format(market.bestAsk)}`;
   article.querySelector(".why-change p").textContent = intelligence.explanation;
   const personalInput = article.querySelector(".personal-belief input");
   const personalEdge = article.querySelector(".personal-edge");
-  personalInput.value = Math.round(intelligence.personal * 100);
+  personalInput.value = "";
+  personalInput.placeholder = "1–99";
   const updatePersonalEdge = () => {
+    if (personalInput.value === "") {
+      personalEdge.textContent = "Introduce tu estimación";
+      personalEdge.className = "personal-edge";
+      return;
+    }
     const belief = clamp(Number(personalInput.value) / 100);
-    const cost = Math.max(Number(market.spread || 0), .012);
+    const cost = Number(market.spread || 0);
     const value = belief / Math.max(probability, .01) - 1 - cost / Math.max(probability, .01);
     personalEdge.textContent = `${value >= 0 ? "+" : "−"}${money.format(Math.abs(value))}`;
     personalEdge.className = value >= 0 ? "personal-edge edge-positive" : "personal-edge edge-negative";
@@ -260,7 +235,7 @@ function render() {
       && (state.category === "all" || market.category === state.category)
       && (state.closing === "all" || (daysToClose >= 0 && daysToClose <= Number(state.closing)))
       && Number(market.liquidity || 0) >= state.minLiquidity
-      && (!state.opportunities || market.intelligence.edge >= .08);
+      && (!state.opportunities || market.intelligence.activityScore >= 70);
   });
   const sorters = {
     volume: (a, b) => b.volume - a.volume,
@@ -311,26 +286,30 @@ async function loadMarkets({ reset = false } = {}) {
     setDataStatus("loading", "Conectando");
   }
   try {
-    const response = await fetch(`/api/markets?limit=100&offset=${state.nextOffset}`, { headers: { Accept: "application/json" } });
+    const response = await fetch(`/api/markets?limit=${PAGE_SIZE}&offset=${state.nextOffset}`, { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`API ${response.status}`);
     const payload = await response.json();
     if (!Array.isArray(payload.markets)) throw new Error("Invalid response");
     const markets = new Map(state.markets.map(market => [market.id || `${market.question}:${market.endDate}`, market]));
     const previousSize = markets.size;
-    payload.markets.forEach(market => markets.set(market.id || `${market.question}:${market.endDate}`, enrichMarket(market)));
+    payload.markets.forEach(market => {
+      if (!market.intelligence || market.intelligence.source !== "gamma") throw new Error("Invalid intelligence response");
+      markets.set(market.id || `${market.question}:${market.endDate}`, market);
+    });
     state.markets = [...markets.values()];
     state.hasMore = payload.hasMore === true;
     state.nextOffset = Number(payload.nextOffset);
     if (state.hasMore && (!Number.isSafeInteger(state.nextOffset) || state.nextOffset < 0 || markets.size === previousSize)) throw new Error("Invalid pagination response");
-    if (state.markets.length === 0) throw new Error("Empty response");
-    setDataStatus("live", "Datos en directo");
+    const dataTime = safeDate(payload.dataAsOf);
+    setDataStatus("live", dataTime
+      ? `Gamma · ${dataTime.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`
+      : "Gamma en directo");
     elements.notice.hidden = true;
   } catch (error) {
-    console.warn("Using demo market fallback:", error);
+    console.warn("Live market data unavailable:", error);
     if (state.markets.length === 0) {
-      state.markets = DEMO_MARKETS.map(enrichMarket);
-      setDataStatus("demo", "Modo demostración");
-      showNotice("Gamma no responde en este momento. Mostramos datos de demostración.");
+      setDataStatus("error", "Datos no disponibles");
+      showNotice("Gamma no responde en este momento. No se muestran datos ficticios.");
     } else {
       setDataStatus("partial", "Datos parciales");
       showNotice("La carga se interrumpió. Conservamos los mercados recuperados.");

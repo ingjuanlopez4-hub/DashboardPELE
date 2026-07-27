@@ -25,6 +25,11 @@ competitiveness (10%). Missing optional factors are excluded and the score repor
 its data coverage. This measures the quality of the price-discovery signal; it is not
 a guarantee that the predicted event will occur.
 
+The API also returns an `intelligence` object derived only from Gamma's observed
+one-hour, one-day and one-week price changes, current liquidity, 24-hour volume,
+bid/ask and spread. Missing upstream metrics remain `null`; the server does not
+fabricate history, holder concentration, external forecasts, or expected value.
+
 ## Deploy
 
 1. Import the repository in Vercel or install the CLI with `npm i -g vercel`.
@@ -62,11 +67,12 @@ database. Cold starts and execution time limits apply, and the filesystem is not
 durable. Keep live trading on an always-on process (VM, container service, or worker)
 with persistent storage and independent monitoring.
 
-The dashboard follows Gamma pagination in batches of 100 until every active market
-and its current Yes probability has been loaded. Each serverless invocation makes one
+The dashboard follows Gamma pagination in batches of 10 as the user requests more
+markets. Each serverless invocation makes one
 bounded Gamma request with a 10-second timeout, avoiding oversized Vercel responses.
-If Gamma fails during pagination, the browser keeps and clearly labels the markets
-already recovered; if the first page fails, it shows a small demo fallback.
+If Gamma fails during pagination, the browser keeps and clearly labels any markets
+already recovered. If the first page fails, it shows an explicit unavailable state
+instead of substituting fictional markets.
 
 The health endpoint proves only that the dashboard function can execute. It does not
 report trading-bot health. Configure external uptime monitoring separately for both

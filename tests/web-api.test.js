@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { MarketDataError, calculateConfidence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
+const { MarketDataError, calculateConfidence, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
 
 const RAW_MARKET = {
@@ -16,6 +16,7 @@ const RAW_MARKET = {
   volume24hr: 4200,
   liquidity: "25000.5",
   endDate: "2027-01-01T00:00:00Z",
+  updatedAt: "2026-07-26T12:30:00Z",
   events: [{ slug: "bitcoin-price-in-2027" }]
 };
 
@@ -25,6 +26,26 @@ test("normalizes Gamma string arrays, numbers, category, and URL", () => {
   assert.equal(market.category, "Crypto");
   assert.equal(market.liquidity, 25000.5);
   assert.equal(market.url, "https://polymarket.com/event/bitcoin-price-in-2027");
+  assert.equal(market.updatedAt, "2026-07-26T12:30:00Z");
+});
+
+test("does not classify Ethiopia as crypto because it contains eth", () => {
+  const market = normalizeMarket({
+    question: "Will the Prime Minister of Ethiopia win the elections?",
+    outcomes: '["Yes", "No"]',
+    outcomePrices: '["0.5", "0.5"]'
+  });
+  assert.equal(market.category, "Politics");
+});
+
+test("uses Gamma sports metadata before keyword classification", () => {
+  const market = normalizeMarket({
+    question: "New York vs Philadelphia",
+    sportsMarketType: "moneyline",
+    outcomes: '["New York", "Philadelphia"]',
+    outcomePrices: '["0.4", "0.6"]'
+  });
+  assert.equal(market.category, "Sports");
 });
 
 test("calculates an explainable confidence score from free public metrics", () => {
@@ -48,6 +69,36 @@ test("renormalizes confidence when optional market metrics are missing", () => {
   assert.equal(confidence.score, 100);
   assert.equal(confidence.coverage, 25);
   assert.equal(confidence.factors.length, 1);
+});
+
+test("builds intelligence only from observed Gamma metrics", () => {
+  const intelligence = calculateIntelligence({
+    oneHourPriceChange: "0.01",
+    oneDayPriceChange: "0.05",
+    oneWeekPriceChange: "-0.03",
+    volume24hr: 50000,
+    liquidityNum: 25000
+  }, 0.6);
+
+  assert.deepEqual(intelligence.points, [
+    { hoursAgo: 168, probability: 0.63 },
+    { hoursAgo: 24, probability: 0.5499999999999999 },
+    { hoursAgo: 1, probability: 0.59 },
+    { hoursAgo: 0, probability: 0.6 }
+  ]);
+  assert.equal(intelligence.activityRatio, 2);
+  assert.equal(intelligence.source, "gamma");
+  assert.equal(Object.hasOwn(intelligence, "whaleShare"), false);
+  assert.equal(Object.hasOwn(intelligence, "external"), false);
+});
+
+test("reports unavailable intelligence instead of inventing values", () => {
+  const intelligence = calculateIntelligence({}, 0.42);
+  assert.deepEqual(intelligence.points, [{ hoursAgo: 0, probability: 0.42 }]);
+  assert.equal(intelligence.change24h, null);
+  assert.equal(intelligence.activityRatio, null);
+  assert.equal(intelligence.activityScore, null);
+  assert.equal(intelligence.activityLevel, "unknown");
 });
 
 test("fetches without network and clamps the internal limit", async () => {

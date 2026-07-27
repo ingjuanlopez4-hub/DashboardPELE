@@ -31,6 +31,56 @@ function logarithmicScore(value, reference) {
   return clamp(Math.log10(1 + Math.max(value, 0)) / Math.log10(1 + reference));
 }
 
+function calculateIntelligence(raw, probability) {
+  const changes = {
+    week: finiteNumber(raw.oneWeekPriceChange),
+    day: finiteNumber(raw.oneDayPriceChange),
+    hour: finiteNumber(raw.oneHourPriceChange)
+  };
+  const points = [
+    [changes.week, 168],
+    [changes.day, 24],
+    [changes.hour, 1]
+  ].filter(([change]) => change !== null)
+    .map(([change, hoursAgo]) => ({ hoursAgo, probability: clamp(probability - change) }));
+  points.push({ hoursAgo: 0, probability });
+
+  const volume24h = finiteNumber(raw.volume24hr);
+  const liquidity = finiteNumber(raw.liquidityNum ?? raw.liquidity);
+  const activityRatio = volume24h !== null && liquidity !== null && liquidity > 0
+    ? volume24h / liquidity
+    : null;
+  const changeMagnitude = changes.day === null ? null : Math.abs(changes.day);
+  const activityInputs = [
+    activityRatio === null ? null : clamp(Math.log10(1 + activityRatio) / Math.log10(11)),
+    changeMagnitude === null ? null : clamp(changeMagnitude / 0.2)
+  ].filter(value => value !== null);
+  const activityScore = activityInputs.length
+    ? Math.round(activityInputs.reduce((sum, value) => sum + value, 0) / activityInputs.length * 100)
+    : null;
+
+  let explanation = "Gamma no publica todavía suficiente histórico para explicar un movimiento reciente.";
+  if (changes.day !== null) {
+    const direction = changes.day > 0 ? "subió" : changes.day < 0 ? "bajó" : "no cambió";
+    const activity = activityRatio === null
+      ? "sin una lectura comparable de actividad"
+      : `con volumen de 24h equivalente a ${activityRatio.toFixed(1)} veces la liquidez`;
+    explanation = `El precio de Sí ${direction} ${(Math.abs(changes.day) * 100).toFixed(1)} puntos porcentuales en 24h, ${activity}.`;
+  }
+
+  return {
+    source: "gamma",
+    points,
+    change1h: changes.hour,
+    change24h: changes.day,
+    change7d: changes.week,
+    activityRatio,
+    activityScore,
+    activityLevel: activityScore === null ? "unknown" : activityScore >= 70 ? "high" : activityScore >= 40 ? "medium" : "low",
+    explanation
+  };
+}
+
 function calculateConfidence(raw) {
   const liquidity = finiteNumber(raw.liquidityNum ?? raw.liquidity);
   const volume24h = finiteNumber(raw.volume24hr);
@@ -84,6 +134,7 @@ function jsonList(value) {
 function category(raw) {
   const explicit = String(raw.category || "").trim();
   if (explicit) return explicit.replace(/\b\w/g, letter => letter.toUpperCase());
+  if (raw.sportsMarketType) return "Sports";
 
   for (const tag of jsonList(raw.tags)) {
     const label = tag && typeof tag === "object" ? tag.label : tag;
@@ -93,14 +144,17 @@ function category(raw) {
   const text = [raw.question, raw.slug, raw.description].map(value => String(value || "")).join(" ").toLowerCase();
   const groups = [
     ["Crypto", ["bitcoin", "ethereum", "crypto", "btc", "eth"]],
-    ["Politics", ["election", "president", "congress", "senate", "trump"]],
-    ["Sports", ["nba", "nfl", "soccer", "football", "championship"]],
-    ["Economy", ["fed ", "inflation", "gdp", "interest rate", "recession"]],
-    ["Technology", ["ai ", "openai", "apple", "google", "tesla"]],
+    ["Politics", ["election", "elections", "president", "prime minister", "congress", "senate", "trump"]],
+    ["Sports", ["nba", "nfl", "mlb", "baseball", "soccer", "football", "championship"]],
+    ["Economy", ["fed", "inflation", "gdp", "interest rate", "recession"]],
+    ["Technology", ["ai", "openai", "apple", "google", "tesla"]],
     ["Culture", ["album", "movie", "gta", "oscar", "grammy"]]
   ];
   for (const [name, keywords] of groups) {
-    if (keywords.some(keyword => text.includes(keyword))) return name;
+    if (keywords.some(keyword => {
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+      return new RegExp(`(?:^|\\W)${escaped}(?:$|\\W)`, "i").test(text);
+    })) return name;
   }
   return "Other";
 }
@@ -129,6 +183,8 @@ function normalizeMarket(raw) {
     bestAsk: finiteNumber(raw.bestAsk),
     priceChange24h: finiteNumber(raw.oneDayPriceChange),
     confidence: calculateConfidence(raw),
+    intelligence: calculateIntelligence(raw, Math.round(probability * 10000) / 10000),
+    updatedAt: String(raw.updatedAt || ""),
     endDate: String(raw.endDate || raw.endDateIso || ""),
     url: slug ? `https://polymarket.com/event/${encodeURIComponent(slug)}` : "https://polymarket.com"
   };
@@ -175,6 +231,7 @@ module.exports = {
   MAX_LIMIT,
   MarketDataError,
   calculateConfidence,
+  calculateIntelligence,
   fetchMarkets,
   normalizeMarket
 };
