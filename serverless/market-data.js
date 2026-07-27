@@ -4,6 +4,8 @@ const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
 const DEFAULT_LIMIT = 60;
 const MAX_LIMIT = 100;
 const TIMEOUT_MS = 10000;
+const GBM_PATHS = 1000;
+const GBM_SHORT_TERM_DAYS = 7;
 
 class MarketDataError extends Error {
   constructor(message, options) {
@@ -29,6 +31,124 @@ function clamp(value, minimum = 0, maximum = 1) {
 
 function logarithmicScore(value, reference) {
   return clamp(Math.log10(1 + Math.max(value, 0)) / Math.log10(1 + reference));
+}
+
+function logit(probability) {
+  const bounded = clamp(probability, 1e-6, 1 - 1e-6);
+  return Math.log(bounded / (1 - bounded));
+}
+
+function seededRandom(value) {
+  let seed = 2166136261;
+  for (const character of String(value)) {
+    seed ^= character.charCodeAt(0);
+    seed = Math.imul(seed, 16777619);
+  }
+  return () => {
+    seed += 0x6d2b79f5;
+    let result = seed;
+    result = Math.imul(result ^ result >>> 15, result | 1);
+    result ^= result + Math.imul(result ^ result >>> 7, result | 61);
+    return ((result ^ result >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function percentile(sorted, probability) {
+  const position = (sorted.length - 1) * probability;
+  const lower = Math.floor(position);
+  const fraction = position - lower;
+  return sorted[lower + 1] === undefined
+    ? sorted[lower]
+    : sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
+}
+
+function estimateGbmVolatility(raw, probability) {
+  const estimates = [];
+  const periods = [
+    ["oneHourPriceChange", 1, "change_1h"],
+    ["oneDayPriceChange", 24, "change_24h"],
+    ["oneWeekPriceChange", 168, "change_7d"]
+  ];
+  for (const [key, hours, source] of periods) {
+    const change = finiteNumber(raw[key]);
+    const previous = change === null ? null : probability - change;
+    if (previous !== null && previous > 0.001 && previous < 0.999) {
+      const annualized = Math.abs(logit(probability) - logit(previous)) / Math.sqrt(hours / (365 * 24));
+      if (Number.isFinite(annualized) && annualized > 0) estimates.push({ value: Math.min(annualized, 3), source });
+    }
+  }
+
+  const spread = finiteNumber(raw.spread);
+  const midpoint = finiteNumber(raw.bestBid) !== null && finiteNumber(raw.bestAsk) !== null
+    ? (finiteNumber(raw.bestBid) + finiteNumber(raw.bestAsk)) / 2
+    : probability;
+  if (spread !== null && spread > 0 && midpoint > 0) {
+    estimates.push({ value: Math.min(spread / midpoint * Math.sqrt(365 * 24), 3), source: "spread" });
+  }
+
+  if (!estimates.length) {
+    return { volatility: 0.5, sources: ["default_assumption"], calibration: "assumed" };
+  }
+  const values = estimates.map(estimate => estimate.value).sort((a, b) => a - b);
+  return {
+    volatility: clamp(percentile(values, 0.5), 0.1, 3),
+    sources: estimates.map(estimate => estimate.source),
+    calibration: "gamma"
+  };
+}
+
+function calculateGbmProjection(raw, probability, now = Date.now()) {
+  const endDate = new Date(raw.endDate || raw.endDateIso || "");
+  if (!Number.isFinite(endDate.getTime())) {
+    return { model: "gbm_log_odds", status: "unavailable", reason: "missing_expiry" };
+  }
+  const horizonDays = (endDate.getTime() - Number(now)) / 86400000;
+  if (horizonDays <= GBM_SHORT_TERM_DAYS) {
+    return {
+      model: "gbm_log_odds",
+      status: "unavailable",
+      reason: horizonDays <= 0 ? "market_expired" : "short_term_market",
+      horizonDays: Math.max(0, Math.round(horizonDays * 10) / 10),
+      thresholdDays: GBM_SHORT_TERM_DAYS
+    };
+  }
+  if (probability <= 0 || probability >= 1) {
+    return { model: "gbm_log_odds", status: "unavailable", reason: "price_boundary" };
+  }
+
+  const { volatility, sources, calibration } = estimateGbmVolatility(raw, probability);
+  const horizonYears = horizonDays / 365;
+  const initialLogOdds = logit(probability);
+  const drift = -0.5 * volatility * volatility * horizonYears;
+  const diffusion = volatility * Math.sqrt(horizonYears);
+  const random = seededRandom(raw.conditionId || raw.id || raw.question || probability);
+  const outcomes = [];
+  let total = 0;
+  for (let index = 0; index < GBM_PATHS; index += 1) {
+    const first = Math.max(random(), Number.EPSILON);
+    const second = random();
+    const normal = Math.sqrt(-2 * Math.log(first)) * Math.cos(2 * Math.PI * second);
+    const projected = 1 / (1 + Math.exp(-(initialLogOdds + drift + diffusion * normal)));
+    outcomes.push(projected);
+    total += projected;
+  }
+  outcomes.sort((a, b) => a - b);
+  const rounded = value => Math.round(value * 10000) / 10000;
+  const mean = total / GBM_PATHS;
+  return {
+    model: "gbm_log_odds",
+    status: "available",
+    paths: GBM_PATHS,
+    horizonDays: Math.round(horizonDays * 10) / 10,
+    volatility: rounded(volatility),
+    volatilitySources: sources,
+    calibration,
+    mean: rounded(mean),
+    median: rounded(percentile(outcomes, 0.5)),
+    p05: rounded(percentile(outcomes, 0.05)),
+    p95: rounded(percentile(outcomes, 0.95)),
+    expectedChange: rounded(mean - probability)
+  };
 }
 
 function calculateIntelligence(raw, probability) {
@@ -184,6 +304,7 @@ function normalizeMarket(raw) {
     priceChange24h: finiteNumber(raw.oneDayPriceChange),
     confidence: calculateConfidence(raw),
     intelligence: calculateIntelligence(raw, Math.round(probability * 10000) / 10000),
+    gbm: calculateGbmProjection(raw, Math.round(probability * 10000) / 10000),
     updatedAt: String(raw.updatedAt || ""),
     endDate: String(raw.endDate || raw.endDateIso || ""),
     url: slug ? `https://polymarket.com/event/${encodeURIComponent(slug)}` : "https://polymarket.com"
@@ -231,7 +352,9 @@ module.exports = {
   MAX_LIMIT,
   MarketDataError,
   calculateConfidence,
+  calculateGbmProjection,
   calculateIntelligence,
+  estimateGbmVolatility,
   fetchMarkets,
   normalizeMarket
 };

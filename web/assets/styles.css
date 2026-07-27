@@ -199,8 +199,15 @@ h2 { margin: 0; color: var(--deep); font: 900 clamp(3rem, 6vw, 6rem)/.85 var(--d
 .market-intelligence[open] > summary::after { content: "−"; }
 .intelligence-detail { padding: .85rem; background: var(--ice); border-top: 1px solid var(--line); }
 .comparison-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
-.comparison-row span, .why-change span, .personal-belief span { display: block; color: var(--muted); font: 700 .55rem var(--data); text-transform: uppercase; }
+.comparison-row span, .why-change span, .personal-belief span, .gbm-projection span { display: block; color: var(--muted); font: 700 .55rem var(--data); text-transform: uppercase; }
 .comparison-row strong { display: block; margin-top: .25rem; font-size: .83rem; }
+.gbm-projection { margin-top: .8rem; padding: .75rem; color: var(--white); background: var(--deep); }
+.gbm-heading { display: flex; justify-content: space-between; gap: .75rem; }
+.gbm-heading > span { color: var(--cyan); }
+.gbm-heading small { color: var(--line); font: .52rem var(--data); text-align: right; }
+.gbm-values { margin-top: .7rem; display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.gbm-values strong { display: block; margin-top: .25rem; color: var(--white); font-size: .85rem; }
+.gbm-note { margin: .65rem 0 0; color: var(--line); font: .55rem/1.45 var(--data); }
 .why-change { margin: .8rem 0; padding-top: .8rem; border-top: 1px solid var(--line); }
 .why-change p { margin: .35rem 0 0; font-size: .75rem; line-height: 1.45; }
 .personal-belief { display: grid; grid-template-columns: 1fr 70px; align-items: end; gap: .7rem; }

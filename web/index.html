@@ -66,7 +66,7 @@
 
     <aside class="provenance" aria-label="Procedencia de las lecturas">
       <p><span class="provenance-key market-source">Mercado</span><strong>Precio, volumen y liquidez</strong><small>Publicados por Gamma</small></p>
-      <p><span class="provenance-key model-source">Modelo</span><strong>Solidez de la señal</strong><small>Calculada por PELE</small></p>
+      <p><span class="provenance-key model-source">Modelo</span><strong>Solidez + GBM en log-odds</strong><small>Calculados por PELE; no son datos observados</small></p>
       <p><span class="provenance-key derived-source">Derivado</span><strong>Tendencia y presión de actividad</strong><small>Calculadas con métricas públicas de Gamma</small></p>
     </aside>
 
@@ -76,7 +76,7 @@
           <p class="signal-kicker">Memoria de la señal / modelo PELE</p>
           <h2 id="intelligence-title">La señal tiene memoria.</h2>
         </div>
-        <p>La calidad de una señal se mide por lo que hizo antes y por cómo está cambiando ahora.</p>
+        <p>La calidad parte de datos observados; el GBM añade un rango probabilístico hasta el cierre sin presentarlo como certeza.</p>
       </header>
       <div class="validation-board">
         <article class="hit-rate">

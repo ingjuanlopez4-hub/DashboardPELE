@@ -124,6 +124,14 @@ function card(market) {
             <div><span>Polymarket</span><strong class="market-comparison"></strong></div>
             <div><span>Bid / ask</span><strong class="book-comparison"></strong></div>
           </div>
+          <div class="gbm-projection">
+            <div class="gbm-heading"><span>Movimiento Browniano Geométrico</span><small class="gbm-meta"></small></div>
+            <div class="gbm-values">
+              <div><span>Mediana al cierre</span><strong class="gbm-median"></strong></div>
+              <div><span>Rango P5–P95</span><strong class="gbm-range"></strong></div>
+            </div>
+            <p class="gbm-note"></p>
+          </div>
           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
           <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge"></strong></label>
           <small class="ev-formula">EV = probabilidad propia ÷ precio − 1 − spread estimado.</small>
@@ -186,6 +194,29 @@ function card(market) {
   article.querySelector(".book-comparison").textContent = market.bestBid === null || market.bestAsk === null
     ? "Sin dato"
     : `${percent.format(market.bestBid)} / ${percent.format(market.bestAsk)}`;
+  const gbm = market.gbm;
+  const gbmMeta = article.querySelector(".gbm-meta");
+  const gbmMedian = article.querySelector(".gbm-median");
+  const gbmRange = article.querySelector(".gbm-range");
+  const gbmNote = article.querySelector(".gbm-note");
+  if (gbm?.status === "available") {
+    gbmMeta.textContent = `${gbm.paths.toLocaleString("es-ES")} trayectorias · ${Math.round(gbm.horizonDays)} días`;
+    gbmMedian.textContent = percent.format(gbm.median);
+    gbmRange.textContent = `${percent.format(gbm.p05)}–${percent.format(gbm.p95)}`;
+    const calibration = gbm.calibration === "gamma" ? "calibrada con Gamma" : "volatilidad asumida";
+    gbmNote.textContent = `σ anualizada ${gbm.volatility.toFixed(2)} · ${calibration}. Proyección probabilística, no pronóstico garantizado.`;
+  } else {
+    const reasons = {
+      short_term_market: "No se ejecuta en mercados con 7 días o menos hasta el cierre.",
+      market_expired: "El mercado ya alcanzó su fecha de cierre.",
+      missing_expiry: "Gamma no publicó una fecha de cierre válida.",
+      price_boundary: "El precio está en un límite incompatible con el modelo."
+    };
+    gbmMeta.textContent = "No disponible";
+    gbmMedian.textContent = "--";
+    gbmRange.textContent = "--";
+    gbmNote.textContent = reasons[gbm?.reason] || "No hay datos suficientes para ejecutar el modelo.";
+  }
   article.querySelector(".why-change p").textContent = intelligence.explanation;
   const personalInput = article.querySelector(".personal-belief input");
   const personalEdge = article.querySelector(".personal-edge");

@@ -30,6 +30,13 @@ one-hour, one-day and one-week price changes, current liquidity, 24-hour volume,
 bid/ask and spread. Missing upstream metrics remain `null`; the server does not
 fabricate history, holder concentration, external forecasts, or expected value.
 
+For markets with more than seven days until expiry, the server runs 1,000 seeded
+Geometric Brownian Motion paths in log-odds space. Volatility is calibrated from
+Gamma's observed price changes and spread when available, otherwise the response
+marks the 0.50 annualized volatility as an explicit assumption. The API returns the
+P5, median, mean and P95 projection under `market.gbm`; these are model outputs, not
+observed prices or guaranteed forecasts.
+
 ## Deploy
 
 1. Import the repository in Vercel or install the CLI with `npm i -g vercel`.

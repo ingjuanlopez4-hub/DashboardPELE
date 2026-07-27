@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { MarketDataError, calculateConfidence, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
+const { MarketDataError, calculateConfidence, calculateGbmProjection, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
 
 const RAW_MARKET = {
@@ -99,6 +99,43 @@ test("reports unavailable intelligence instead of inventing values", () => {
   assert.equal(intelligence.activityRatio, null);
   assert.equal(intelligence.activityScore, null);
   assert.equal(intelligence.activityLevel, "unknown");
+});
+
+test("runs deterministic GBM paths in log-odds space", () => {
+  const raw = {
+    conditionId: "gbm-market",
+    endDate: "2027-07-26T00:00:00Z",
+    oneDayPriceChange: 0.03,
+    oneWeekPriceChange: -0.02,
+    spread: 0.01,
+    bestBid: 0.59,
+    bestAsk: 0.60
+  };
+  const now = Date.parse("2026-07-26T00:00:00Z");
+  const first = calculateGbmProjection(raw, 0.6, now);
+  const second = calculateGbmProjection(raw, 0.6, now);
+
+  assert.deepEqual(first, second);
+  assert.equal(first.status, "available");
+  assert.equal(first.model, "gbm_log_odds");
+  assert.equal(first.paths, 1000);
+  assert.equal(first.horizonDays, 365);
+  assert.equal(first.calibration, "gamma");
+  assert.ok(first.p05 < first.median);
+  assert.ok(first.median < first.p95);
+  assert.ok(first.mean > 0 && first.mean < 1);
+});
+
+test("marks GBM assumptions and short-term exclusions explicitly", () => {
+  const now = Date.parse("2026-07-26T00:00:00Z");
+  const assumed = calculateGbmProjection({ id: "assumed", endDate: "2026-08-26T00:00:00Z" }, 0.5, now);
+  const shortTerm = calculateGbmProjection({ id: "short", endDate: "2026-07-30T00:00:00Z" }, 0.5, now);
+
+  assert.equal(assumed.status, "available");
+  assert.equal(assumed.calibration, "assumed");
+  assert.deepEqual(assumed.volatilitySources, ["default_assumption"]);
+  assert.equal(shortTerm.status, "unavailable");
+  assert.equal(shortTerm.reason, "short_term_market");
 });
 
 test("fetches without network and clamps the internal limit", async () => {
