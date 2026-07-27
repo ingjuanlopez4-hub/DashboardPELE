@@ -10,6 +10,10 @@ static dashboard and short-lived Node.js functions for public analysis only.
   normalizes the payload and caches each page at Vercel's edge for 60 seconds.
 - `serverless/market-data.js`: dependency-free Gamma client and response normalization.
 - `api/health.js`: lightweight Node.js liveness endpoint.
+- `api/projection.ts`: validated Yahoo Finance proxy and TypeScript GBM endpoint for
+  symbol projections. Responses are edge-cached for five minutes.
+- `serverless/finance-projection.ts`: credential-free Yahoo historical-price client,
+  annualized calibration, seeded simulation, histogram and threshold probabilities.
 
 No wallet key, Polymarket credential, `.env` value, SQLite file, order endpoint, or
 trading module is imported by the web application. The serverless functions are
@@ -44,6 +48,7 @@ observed prices or guaranteed forecasts.
 3. Do not add trading secrets to this Vercel project; none are required.
 4. Run `vercel` for a preview and `vercel --prod` for production.
 5. Verify `/`, `/api/health`, and `/api/markets?limit=20`.
+6. Verify `/api/projection?symbol=AAPL&horizonDays=30&paths=5000`.
 
 Local static preview:
 
@@ -63,6 +68,7 @@ node --check serverless/market-data.js
 node --check api/markets.js
 node --check api/health.js
 node --check web/assets/app.js
+npm run test:web
 python -m json.tool vercel.json >/dev/null
 ```
 
@@ -85,3 +91,8 @@ The health endpoint proves only that the dashboard function can execute. It does
 report trading-bot health. Configure external uptime monitoring separately for both
 services. Review current function duration, bandwidth, and invocation quotas in the
 selected Vercel plan before increasing the sample size or refresh frequency.
+
+The browser polls the last valid symbol projection every five minutes only while the
+tab is visible. Yahoo Finance's chart endpoint requires no application credential,
+but it is an external, unofficial integration and can change or rate-limit requests;
+the dashboard preserves the last successful result and exposes failures explicitly.

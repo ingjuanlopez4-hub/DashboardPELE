@@ -99,6 +99,29 @@
           </div>
         </aside>
       </div>
+      <section class="asset-lab" aria-labelledby="asset-lab-title">
+        <header>
+          <div><p class="signal-kicker">Yahoo Finance / simulación GBM</p><h3 id="asset-lab-title">Distribución de precio</h3></div>
+          <p>Histórico diario y precio actual, recalculados cada 5 minutos mientras esta pestaña está visible.</p>
+        </header>
+        <form id="projection-form" class="projection-form">
+          <label><span>Símbolo</span><input id="projection-symbol" name="symbol" value="AAPL" maxlength="15" required autocomplete="off"></label>
+          <label><span>Horizonte</span><select id="projection-horizon" name="horizonDays"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option><option value="180">180 días</option></select></label>
+          <label><span>Precio objetivo (opcional)</span><input id="projection-target" name="targetPrice" type="number" min="0.01" max="10000000" step="0.01" placeholder="Precio actual"></label>
+          <button type="submit">Simular 5.000 rutas</button>
+        </form>
+        <div id="projection-status" class="projection-status" role="status" aria-live="polite">Consultando histórico de AAPL…</div>
+        <div id="projection-results" class="projection-results" hidden>
+          <div class="projection-summary">
+            <p><span>Precio actual</span><strong id="projection-current">--</strong></p>
+            <p><span>Mediana</span><strong id="projection-median">--</strong></p>
+            <p><span>Prob. de subida</span><strong id="projection-gain">--</strong></p>
+            <p><span>Prob. sobre objetivo</span><strong id="projection-above">--</strong></p>
+          </div>
+          <div><div id="projection-chart" class="projection-chart" role="img" aria-label="Distribución simulada de precios terminales"></div><div id="projection-range" class="projection-range"></div></div>
+          <p id="projection-meta" class="projection-meta"></p>
+        </div>
+      </section>
     </section>
 
     <section class="workspace" id="markets" aria-labelledby="markets-title">

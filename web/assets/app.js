@@ -22,6 +22,16 @@ const elements = {
   alertCount: document.querySelector("#alert-count"), alertDeskCount: document.querySelector("#alert-desk-count"),
   filters: document.querySelector("#filters"), filterToggle: document.querySelector("#filter-toggle")
 };
+const projectionElements = {
+  form: document.querySelector("#projection-form"), symbol: document.querySelector("#projection-symbol"),
+  horizon: document.querySelector("#projection-horizon"), target: document.querySelector("#projection-target"),
+  status: document.querySelector("#projection-status"), results: document.querySelector("#projection-results"),
+  chart: document.querySelector("#projection-chart"), current: document.querySelector("#projection-current"),
+  median: document.querySelector("#projection-median"), gain: document.querySelector("#projection-gain"),
+  above: document.querySelector("#projection-above"), range: document.querySelector("#projection-range"),
+  meta: document.querySelector("#projection-meta")
+};
+let projectionLoading = false;
 const money = new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 0 });
 const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
@@ -86,6 +96,53 @@ function updateKpis() {
 function setDataStatus(status, label) {
   elements.dataStatus.dataset.state = status;
   elements.dataStatusLabel.textContent = label;
+}
+
+function assetMoney(value, currency) {
+  try { return new Intl.NumberFormat("es-ES", { style: "currency", currency: currency || "USD", maximumFractionDigits: 2 }).format(value); }
+  catch { return Number(value).toFixed(2); }
+}
+
+async function loadProjection() {
+  if (projectionLoading || !projectionElements.form) return;
+  if (!projectionElements.form.reportValidity()) return;
+  projectionLoading = true;
+  const button = projectionElements.form.querySelector("button");
+  button.setAttribute("aria-busy", "true");
+  projectionElements.status.textContent = "Actualizando histórico y simulación…";
+  const params = new URLSearchParams({
+    symbol: projectionElements.symbol.value.trim(), horizonDays: projectionElements.horizon.value, paths: "5000"
+  });
+  if (projectionElements.target.value) params.set("targetPrice", projectionElements.target.value);
+  try {
+    const response = await fetch(`/api/projection?${params}`, { headers: { Accept: "application/json" } });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload?.error?.message || `API ${response.status}`);
+    const currency = payload.currency || "USD";
+    projectionElements.current.textContent = assetMoney(payload.currentPrice, currency);
+    projectionElements.median.textContent = assetMoney(payload.distribution.median, currency);
+    projectionElements.gain.textContent = percent.format(payload.probabilities.gain);
+    projectionElements.above.textContent = percent.format(payload.probabilities.aboveTarget);
+    const bins = payload.distribution.histogram;
+    const maximum = Math.max(...bins.map(bin => bin.probability), Number.EPSILON);
+    projectionElements.chart.replaceChildren(...bins.map(bin => {
+      const bar = document.createElement("i");
+      bar.style.height = `${Math.max(2, bin.probability / maximum * 100)}%`;
+      bar.title = `${assetMoney(bin.from, currency)}–${assetMoney(bin.to, currency)}: ${percent.format(bin.probability)}`;
+      return bar;
+    }));
+    projectionElements.chart.setAttribute("aria-label", `Distribución de ${payload.parameters.paths} precios simulados para ${payload.symbol}; mediana ${assetMoney(payload.distribution.median, currency)}`);
+    projectionElements.range.textContent = `P5 ${assetMoney(payload.distribution.p05, currency)} · P95 ${assetMoney(payload.distribution.p95, currency)}`;
+    const updated = safeDate(payload.dataAsOf);
+    projectionElements.meta.textContent = `${payload.symbol} · ${payload.calibration.observations} cierres · σ anual ${percent.format(payload.calibration.annualVolatility)} · Yahoo Finance${updated ? ` · ${updated.toLocaleString("es-ES")}` : ""}. Modelo probabilístico, no asesoramiento financiero.`;
+    projectionElements.status.textContent = `Simulación actualizada para ${payload.symbol}.`;
+    projectionElements.results.hidden = false;
+  } catch (error) {
+    projectionElements.status.textContent = `No se pudo calcular la proyección. ${error.message}`;
+  } finally {
+    projectionLoading = false;
+    button.removeAttribute("aria-busy");
+  }
 }
 
 function card(market) {
@@ -375,6 +432,9 @@ elements.filterToggle.addEventListener("click", () => {
   elements.filterToggle.setAttribute("aria-expanded", String(expanded));
   elements.filters.dataset.mobileCollapsed = String(!expanded);
 });
+projectionElements.form?.addEventListener("submit", event => { event.preventDefault(); loadProjection(); });
+setInterval(() => { if (document.visibilityState === "visible") loadProjection(); }, 5 * 60 * 1000);
 
 persistAlerts();
 loadMarkets({ reset: true });
+loadProjection();

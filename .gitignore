@@ -37,6 +37,8 @@ htmlcov/
 .pytest_cache/
 .cache/
 *.egg-info/
+node_modules/
+.test-dist/
 
 # Jupyter
 .ipynb_checkpoints/

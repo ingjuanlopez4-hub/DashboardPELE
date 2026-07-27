@@ -108,6 +108,8 @@ Strategy parameters and circuit‑breaker thresholds are tuned in `src/config/li
 The repository includes a serverless market dashboard in `web/` with public API
 functions in `api/`. It displays live Gamma market data without exposing wallet
 credentials or running the trading loop in Vercel.
+It also exposes `/api/projection` for credential-free Yahoo Finance history/current
+prices and TypeScript GBM distributions, refreshed by the browser every five minutes.
 
 ```bash
 # Production-equivalent local preview (requires the Vercel CLI)

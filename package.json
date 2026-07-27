@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:web": "npm run build && node --test tests/web-api.test.js .test-dist/tests/finance-projection.test.js",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
