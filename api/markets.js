@@ -25,7 +25,7 @@ function parsePagination(requestUrl = "/api/markets") {
 function send(response, status, payload) {
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
+  response.setHeader("Cache-Control", status === 200 ? "s-maxage=60, stale-while-revalidate=300" : "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.end(JSON.stringify(payload));
 }
@@ -45,6 +45,8 @@ async function marketsHandler(request, response) {
       count: markets.length,
       source: "gamma",
       dataAsOf,
+      dataStatus: markets.length ? "available" : "empty",
+      generatedAt: new Date().toISOString(),
       offset,
       hasMore,
       nextOffset: hasMore ? offset + markets.length : null

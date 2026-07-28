@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { MarketDataError, calculateConfidence, calculateGbmProjection, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
+const { createWebServer } = require("../scripts/web_server");
 
 const RAW_MARKET = {
   id: "42",
@@ -69,6 +70,37 @@ test("renormalizes confidence when optional market metrics are missing", () => {
   assert.equal(confidence.score, 100);
   assert.equal(confidence.coverage, 25);
   assert.equal(confidence.factors.length, 1);
+});
+
+test("keeps absent metrics distinct from real zero values", () => {
+  const absent = normalizeMarket({ question: "No observations", outcomes: '["Yes", "No"]', outcomePrices: "[]" });
+  const zero = normalizeMarket({
+    question: "Observed zero", outcomes: '["Yes", "No"]', outcomePrices: '["0", "1"]',
+    volumeNum: 0, volume24hr: 0, liquidityNum: 0, spread: 0
+  });
+  assert.equal(absent.probability, null);
+  assert.equal(absent.volume, null);
+  assert.equal(absent.liquidity, null);
+  assert.equal(absent.confidence.score, null);
+  assert.equal(absent.confidence.level, "unknown");
+  assert.equal(absent.gbm.reason, "missing_price");
+  assert.equal(absent.signalDossier.status, "insufficient_data");
+  assert.equal(zero.probability, 0);
+  assert.equal(zero.volume, 0);
+  assert.equal(zero.liquidity, 0);
+  assert.equal(zero.spread, 0);
+});
+
+test("builds a verifiable signal dossier with provenance and explicit triggers", () => {
+  const market = normalizeMarket({
+    ...RAW_MARKET, oneDayPriceChange: 0.08, spread: 0.06, bestBid: 0.58, bestAsk: 0.64,
+    competitive: 0.8
+  });
+  assert.equal(market.signalDossier.status, "attention");
+  assert.deepEqual(market.signalDossier.triggers.map(trigger => trigger.code), ["price_move_24h", "wide_spread"]);
+  assert.equal(market.signalDossier.provenance.marketId, "0xabc");
+  assert.equal(market.signalDossier.provenance.source, "gamma");
+  assert.ok(market.signalDossier.evidence.some(item => item.kind === "model"));
 });
 
 test("builds intelligence only from observed Gamma metrics", () => {
@@ -171,5 +203,31 @@ test("parses and validates public pagination", () => {
     "/api/markets?offset=nope"
   ]) {
     assert.throws(() => parsePagination(path), RangeError);
+  }
+});
+
+test("local web server dispatches API routes instead of returning static 404s", async () => {
+  const json = payload => (request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify(payload));
+  };
+  const server = createWebServer({
+    markets: json({ markets: [] }),
+    projection: json({ symbol: "TEST" })
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const [home, markets, projection] = await Promise.all([
+      fetch(`http://127.0.0.1:${port}/`),
+      fetch(`http://127.0.0.1:${port}/api/markets?limit=10&offset=0`),
+      fetch(`http://127.0.0.1:${port}/api/projection?symbol=AAPL`)
+    ]);
+    assert.equal(home.status, 200);
+    assert.match(home.headers.get("content-type"), /text\/html/);
+    assert.deepEqual(await markets.json(), { markets: [] });
+    assert.deepEqual(await projection.json(), { symbol: "TEST" });
+  } finally {
+    await new Promise(resolve => server.close(resolve));
   }
 });

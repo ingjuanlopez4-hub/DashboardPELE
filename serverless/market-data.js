@@ -14,9 +14,10 @@ class MarketDataError extends Error {
   }
 }
 
-function number(value) {
+function nonNegativeNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function finiteNumber(value) {
@@ -98,6 +99,9 @@ function estimateGbmVolatility(raw, probability) {
 }
 
 function calculateGbmProjection(raw, probability, now = Date.now()) {
+  if (probability === null || !Number.isFinite(probability)) {
+    return { model: "gbm_log_odds", status: "unavailable", reason: "missing_price" };
+  }
   const endDate = new Date(raw.endDate || raw.endDateIso || "");
   if (!Number.isFinite(endDate.getTime())) {
     return { model: "gbm_log_odds", status: "unavailable", reason: "missing_expiry" };
@@ -157,13 +161,13 @@ function calculateIntelligence(raw, probability) {
     day: finiteNumber(raw.oneDayPriceChange),
     hour: finiteNumber(raw.oneHourPriceChange)
   };
-  const points = [
+  const points = probability === null ? [] : [
     [changes.week, 168],
     [changes.day, 24],
     [changes.hour, 1]
   ].filter(([change]) => change !== null)
     .map(([change, hoursAgo]) => ({ hoursAgo, probability: clamp(probability - change) }));
-  points.push({ hoursAgo: 0, probability });
+  if (probability !== null) points.push({ hoursAgo: 0, probability });
 
   const volume24h = finiteNumber(raw.volume24hr);
   const liquidity = finiteNumber(raw.liquidityNum ?? raw.liquidity);
@@ -226,17 +230,68 @@ function calculateConfidence(raw) {
   const totalWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const score = totalWeight
     ? Math.round(available.reduce((sum, factor) => sum + factor.value * factor.weight, 0) / totalWeight * 100)
-    : 0;
+    : null;
 
   return {
     score,
-    level: score >= 75 ? "high" : score >= 50 ? "medium" : "low",
+    level: score === null ? "unknown" : score >= 75 ? "high" : score >= 50 ? "medium" : "low",
     coverage: Math.round(totalWeight * 100),
     factors: available.map(factor => ({
       key: factor.key,
       label: factor.label,
       score: Math.round(factor.value * 100)
     }))
+  };
+}
+
+function buildSignalDossier(raw, market) {
+  const missingFields = [
+    ["probability", market.probability],
+    ["volume24h", market.volume24h],
+    ["liquidity", market.liquidity],
+    ["spread", market.spread],
+    ["bestBid", market.bestBid],
+    ["bestAsk", market.bestAsk],
+    ["updatedAt", market.updatedAt || null]
+  ].filter(([, value]) => value === null).map(([key]) => key);
+  const triggers = [];
+  if (market.intelligence.change24h !== null && Math.abs(market.intelligence.change24h) >= 0.05) {
+    triggers.push({ code: "price_move_24h", label: "Cambio de precio ≥ 5 pp", value: market.intelligence.change24h, source: "gamma" });
+  }
+  if (market.intelligence.activityScore !== null && market.intelligence.activityScore >= 70) {
+    triggers.push({ code: "activity_pressure", label: "Presión de actividad ≥ 70", value: market.intelligence.activityScore, source: "pele_derived" });
+  }
+  if (market.spread !== null && market.spread >= 0.05) {
+    triggers.push({ code: "wide_spread", label: "Spread ≥ 5 pp", value: market.spread, source: "gamma" });
+  }
+  const insufficient = market.probability === null || market.confidence.coverage < 50;
+  const status = insufficient ? "insufficient_data" : triggers.length ? "attention" : "monitoring";
+  return {
+    status,
+    summary: status === "insufficient_data"
+      ? "Faltan observaciones para sostener una señal verificable."
+      : status === "attention"
+        ? `${triggers.length} ${triggers.length === 1 ? "regla requiere" : "reglas requieren"} atención.`
+        : "Sin anomalías en las reglas observables actuales.",
+    dataQuality: {
+      status: market.probability === null ? "unavailable" : missingFields.length ? "partial" : "complete",
+      missingFields
+    },
+    triggers,
+    evidence: [
+      { key: "probability", label: "Precio de Sí", value: market.probability, source: "gamma", kind: "observed" },
+      { key: "change24h", label: "Cambio 24h", value: market.intelligence.change24h, source: "gamma", kind: "observed" },
+      { key: "activity", label: "Presión de actividad", value: market.intelligence.activityScore, source: "pele", kind: "derived" },
+      { key: "confidence", label: "Solidez", value: market.confidence.score, source: "pele", kind: "derived" },
+      { key: "gbm", label: "GBM al cierre", value: market.gbm.status === "available" ? market.gbm.median : null, source: "pele", kind: "model" }
+    ],
+    provenance: {
+      marketId: market.id || null,
+      gammaMarketId: raw.id === null || raw.id === undefined ? null : String(raw.id),
+      observedAt: market.updatedAt || null,
+      source: "gamma",
+      model: "pele_market_signal_v1"
+    }
   };
 }
 
@@ -281,34 +336,37 @@ function category(raw) {
 
 function normalizeMarket(raw) {
   const outcomes = jsonList(raw.outcomes).map(String);
-  const prices = jsonList(raw.outcomePrices).map(number);
+  const prices = jsonList(raw.outcomePrices).map(nonNegativeNumber);
   const matchedIndex = outcomes.findIndex(value => value.toLowerCase() === "yes");
   const yesIndex = matchedIndex >= 0 ? matchedIndex : 0;
-  const probability = Math.min(prices[yesIndex] ?? number(raw.lastTradePrice), 1);
+  const candidateProbability = prices[yesIndex] ?? nonNegativeNumber(raw.lastTradePrice);
+  const probability = candidateProbability !== null && candidateProbability <= 1 ? candidateProbability : null;
   const event = Array.isArray(raw.events) && raw.events[0] && typeof raw.events[0] === "object"
     ? raw.events[0]
     : {};
   const slug = String(event.slug || raw.slug || "").trim();
 
-  return {
+  const market = {
     id: String(raw.conditionId || raw.id || ""),
     question: String(raw.question || "Untitled market").trim(),
     category: category(raw),
-    probability: Math.round(probability * 10000) / 10000,
-    volume: number(raw.volumeNum ?? raw.volume),
-    volume24h: number(raw.volume24hr),
-    liquidity: number(raw.liquidityNum ?? raw.liquidity),
+    probability: probability === null ? null : Math.round(probability * 10000) / 10000,
+    volume: nonNegativeNumber(raw.volumeNum ?? raw.volume),
+    volume24h: nonNegativeNumber(raw.volume24hr),
+    liquidity: nonNegativeNumber(raw.liquidityNum ?? raw.liquidity),
     spread: finiteNumber(raw.spread),
     bestBid: finiteNumber(raw.bestBid),
     bestAsk: finiteNumber(raw.bestAsk),
     priceChange24h: finiteNumber(raw.oneDayPriceChange),
     confidence: calculateConfidence(raw),
-    intelligence: calculateIntelligence(raw, Math.round(probability * 10000) / 10000),
-    gbm: calculateGbmProjection(raw, Math.round(probability * 10000) / 10000),
+    intelligence: calculateIntelligence(raw, probability === null ? null : Math.round(probability * 10000) / 10000),
+    gbm: calculateGbmProjection(raw, probability === null ? null : Math.round(probability * 10000) / 10000),
     updatedAt: String(raw.updatedAt || ""),
     endDate: String(raw.endDate || raw.endDateIso || ""),
     url: slug ? `https://polymarket.com/event/${encodeURIComponent(slug)}` : "https://polymarket.com"
   };
+  market.signalDossier = buildSignalDossier(raw, market);
+  return market;
 }
 
 async function fetchMarkets(limit = DEFAULT_LIMIT, offset = 0, fetchImpl = globalThis.fetch) {
@@ -351,6 +409,7 @@ module.exports = {
   DEFAULT_LIMIT,
   MAX_LIMIT,
   MarketDataError,
+  buildSignalDossier,
   calculateConfidence,
   calculateGbmProjection,
   calculateIntelligence,

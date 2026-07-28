@@ -26,7 +26,9 @@ Gamma is a free, public Polymarket API and requires no API key. For every market
 the server calculates a 0-100 market-confidence score from liquidity (25%), 24-hour
 volume (25%), bid/ask spread (25%), 24-hour price stability (15%), and order-book
 competitiveness (10%). Missing optional factors are excluded and the score reports
-its data coverage. This measures the quality of the price-discovery signal; it is not
+its data coverage; when no factor is available, score and level are explicitly
+`null`/`unknown`, never a fabricated zero. Observed zero values remain zero. This
+measures the quality of the price-discovery signal; it is not
 a guarantee that the predicted event will occur.
 
 The API also returns an `intelligence` object derived only from Gamma's observed
@@ -41,6 +43,12 @@ marks the 0.50 annualized volatility as an explicit assumption. The API returns 
 P5, median, mean and P95 projection under `market.gbm`; these are model outputs, not
 observed prices or guaranteed forecasts.
 
+Each market also includes a `signalDossier` with a semantic status (`monitoring`,
+`attention`, or `insufficient_data`), missing fields, rule triggers, evidence marked
+as observed/derived/model, source IDs, and observation time. Browser surveillance
+persists the last evaluated snapshot and a bounded event history in local storage,
+then re-evaluates loaded markets every five minutes while the tab is visible.
+
 ## Deploy
 
 1. Import the repository in Vercel or install the CLI with `npm i -g vercel`.
@@ -50,15 +58,17 @@ observed prices or guaranteed forecasts.
 5. Verify `/`, `/api/health`, and `/api/markets?limit=20`.
 6. Verify `/api/projection?symbol=AAPL&horizonDays=30&paths=5000`.
 
-Local static preview:
+Local preview with working API routes:
 
 ```bash
-python -m http.server 8000
-# Open http://localhost:8000/web/ (API calls need `vercel dev` for full routing.)
+npm run start:web
+# Open http://localhost:3000/
 ```
 
-For a production-equivalent local environment, install the Vercel CLI and run
-`vercel dev` from the repository root.
+The dependency-free local Node server serves `web/` and dispatches `/api/markets`,
+`/api/projection`, and `/api/health`; unlike a static file server, it does not return
+404 for the dashboard APIs. For exact Vercel runtime parity, install the Vercel CLI
+and run `vercel dev` from the repository root.
 
 ## Validation
 

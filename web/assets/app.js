@@ -3,13 +3,19 @@
 const PAGE_SIZE = 10;
 
 const storedAlerts = (() => {
-  try { return new Set(JSON.parse(localStorage.getItem("pele-alerts") || "[]")); }
-  catch { return new Set(); }
+  try {
+    const parsed = JSON.parse(localStorage.getItem("pele-alerts-v2") || localStorage.getItem("pele-alerts") || "[]");
+    if (Array.isArray(parsed)) return new Map(parsed.map(item => {
+      const record = typeof item === "string" ? { id: item } : item;
+      return [String(record.id), record];
+    }));
+  } catch {}
+  return new Map();
 })();
 const state = {
   markets: [], search: "", category: "all", closing: "all", minLiquidity: 0,
   opportunities: false, sort: "volume", nextOffset: 0, hasMore: false, loading: false,
-  alerts: storedAlerts
+  alerts: storedAlerts, dataState: "loading"
 };
 const elements = {
   grid: document.querySelector("#market-grid"), loading: document.querySelector("#loading"),
@@ -47,22 +53,73 @@ function clamp(value, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function finite(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function marketKey(market) {
+  return String(market.id || `${market.question}:${market.endDate}`);
+}
+
+function alertSnapshot(market) {
+  return {
+    probability: finite(market.probability),
+    change24h: finite(market.intelligence?.change24h),
+    activityScore: finite(market.intelligence?.activityScore),
+    spread: finite(market.spread),
+    sourceUpdatedAt: market.updatedAt || null
+  };
+}
+
+function evaluateWatchedMarket(market) {
+  const key = marketKey(market);
+  const record = state.alerts.get(key);
+  if (!record) return;
+  const current = alertSnapshot(market);
+  const previous = record.snapshot || {};
+  const events = [];
+  if (current.probability !== null && finite(previous.probability) !== null
+      && Math.abs(current.probability - previous.probability) >= 0.03) {
+    events.push({ code: "probability_delta", label: `Precio cambió ${percent.format(current.probability - previous.probability)}` });
+  }
+  if (current.activityScore !== null && current.activityScore >= 70 && !(finite(previous.activityScore) >= 70)) {
+    events.push({ code: "activity_pressure", label: `Presión de actividad ${current.activityScore}/100` });
+  }
+  if (current.spread !== null && current.spread >= 0.05 && !(finite(previous.spread) >= 0.05)) {
+    events.push({ code: "wide_spread", label: `Spread ${percent.format(current.spread)}` });
+  }
+  const checkedAt = new Date().toISOString();
+  const knownEvents = Array.isArray(record.events) ? record.events : [];
+  for (const event of events) {
+    const fingerprint = `${event.code}:${current.sourceUpdatedAt || checkedAt}`;
+    if (!knownEvents.some(item => item.fingerprint === fingerprint)) knownEvents.unshift({ ...event, fingerprint, at: checkedAt });
+  }
+  state.alerts.set(key, {
+    ...record, id: key, question: market.question, endDate: market.endDate, url: market.url,
+    snapshot: current, checkedAt, events: knownEvents.slice(0, 20)
+  });
+}
+
 function persistAlerts() {
-  try { localStorage.setItem("pele-alerts", JSON.stringify([...state.alerts])); } catch {}
+  try {
+    localStorage.setItem("pele-alerts-v2", JSON.stringify([...state.alerts.values()]));
+    localStorage.removeItem("pele-alerts");
+  } catch {}
   elements.alertCount.textContent = state.alerts.size;
   elements.alertDeskCount.textContent = state.alerts.size
     ? `${state.alerts.size} ${state.alerts.size === 1 ? "mercado vigilado" : "mercados vigilados"}`
     : "Sin mercados vigilados";
   elements.alertLayerCount.textContent = `${state.alerts.size} ${state.alerts.size === 1 ? "mercado vigilado" : "mercados vigilados"}`;
   const eventDesk = document.querySelector("#alert-events");
-  const events = state.markets.filter(market => state.alerts.has(String(market.id || `${market.question}:${market.endDate}`))).map(market => {
-    const triggers = [];
-    if (market.intelligence.change24h !== null && Math.abs(market.intelligence.change24h) >= .05) triggers.push("cambio de precio");
-    if (market.intelligence.activityScore >= 70) triggers.push("presión de actividad");
-    if (market.spread !== null && market.spread >= .05) triggers.push("spread amplio");
+  const events = [...state.alerts.values()].map(record => {
+    const latest = Array.isArray(record.events) ? record.events[0] : null;
     const item = document.createElement("span");
-    item.dataset.triggered = String(triggers.length > 0);
-    item.textContent = `${triggers.length ? "Disparo" : "Vigilando"}: ${market.question.slice(0, 48)}${market.question.length > 48 ? "…" : ""}${triggers.length ? ` · ${triggers.join(" + ")}` : ""}`;
+    item.dataset.triggered = String(Boolean(latest));
+    const question = record.question || "Mercado guardado";
+    const checked = safeDate(record.checkedAt);
+    item.textContent = `${latest ? "Evento" : "Vigilando"}: ${question.slice(0, 48)}${question.length > 48 ? "…" : ""}${latest ? ` · ${latest.label}` : checked ? ` · revisado ${checked.toLocaleString("es-ES")}` : " · pendiente de primera revisión"}`;
     return item;
   });
   const empty = document.createElement("span");
@@ -71,18 +128,20 @@ function persistAlerts() {
 }
 
 function updateKpis() {
-  const total = key => state.markets.reduce((sum, market) => sum + Number(market[key] || 0), 0);
+  const values = key => state.markets.map(market => finite(market[key])).filter(value => value !== null);
+  const total = key => values(key).reduce((sum, value) => sum + value, 0);
   document.querySelector("#kpi-count").textContent = state.markets.length.toLocaleString("es-ES");
-  document.querySelector("#kpi-volume").textContent = money.format(total("volume"));
-  document.querySelector("#kpi-liquidity").textContent = money.format(total("liquidity"));
-  const average = state.markets.length ? total("probability") / state.markets.length : 0;
-  document.querySelector("#kpi-probability").textContent = percent.format(average);
+  document.querySelector("#kpi-volume").textContent = values("volume").length ? money.format(total("volume")) : "Sin dato";
+  document.querySelector("#kpi-liquidity").textContent = values("liquidity").length ? money.format(total("liquidity")) : "Sin dato";
+  const probabilities = values("probability");
+  const average = probabilities.length ? probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length : null;
+  document.querySelector("#kpi-probability").textContent = average === null ? "Sin dato" : percent.format(average);
   const verdict = document.querySelector("#verdict");
-  const yes = Math.round(average * 100);
+  const yes = average === null ? 50 : Math.round(average * 100);
   verdict.style.setProperty("--yes", `${yes}%`);
-  document.querySelector("#verdict-yes").textContent = `${yes}%`;
-  document.querySelector("#verdict-no").textContent = `${100 - yes}%`;
-  verdict.setAttribute("aria-label", `Consenso agregado: Sí ${yes}%, No ${100 - yes}%`);
+  document.querySelector("#verdict-yes").textContent = average === null ? "--" : `${yes}%`;
+  document.querySelector("#verdict-no").textContent = average === null ? "--" : `${100 - yes}%`;
+  verdict.setAttribute("aria-label", average === null ? "Consenso agregado no disponible" : `Consenso agregado: Sí ${yes}%, No ${100 - yes}%`);
   const covered = state.markets.filter(market => market.intelligence?.change24h !== null).length;
   const coverage = state.markets.length ? Math.round(covered / state.markets.length * 100) : 0;
   document.querySelector("#coverage-rate").innerHTML = `${coverage}<span>%</span>`;
@@ -118,7 +177,8 @@ async function loadProjection() {
   if (projectionElements.target.value) params.set("targetPrice", projectionElements.target.value);
   try {
     const response = await fetch(`/api/projection?${params}`, { headers: { Accept: "application/json" } });
-    const payload = await response.json();
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json") ? await response.json() : null;
     if (!response.ok) throw new Error(payload?.error?.message || `API ${response.status}`);
     const currency = payload.currency || "USD";
     projectionElements.current.textContent = assetMoney(payload.currentPrice, currency);
@@ -140,7 +200,7 @@ async function loadProjection() {
     projectionElements.status.textContent = `Simulación actualizada para ${payload.symbol}.`;
     projectionElements.results.hidden = false;
   } catch (error) {
-    projectionElements.status.textContent = `No se pudo calcular la proyección. ${error.message}`;
+    projectionElements.status.textContent = `Proyección no disponible. ${error.message}${projectionElements.results.hidden ? "" : " Se conserva el último resultado válido."}`;
   } finally {
     projectionLoading = false;
     button.removeAttribute("aria-busy");
@@ -151,11 +211,12 @@ function card(market) {
   const article = document.createElement("article");
   article.className = "market-card";
   const end = safeDate(market.endDate);
-  const probability = Math.max(0, Math.min(1, Number(market.probability || 0)));
-  const confidence = market.confidence || { score: 0, level: "low", coverage: 0, factors: [] };
-  const intelligence = market.intelligence;
-  const displayedLevel = confidence.coverage < 50 ? "low" : confidence.level;
-  const confidenceLabels = { high: "Alta", medium: "Media", low: "Baja" };
+  const rawProbability = finite(market.probability);
+  const probability = rawProbability === null ? null : clamp(rawProbability);
+  const confidence = market.confidence || { score: null, level: "unknown", coverage: 0, factors: [] };
+  const intelligence = market.intelligence || { points: [], change24h: null, activityScore: null, activityRatio: null, activityLevel: "unknown", explanation: "Datos no disponibles." };
+  const displayedLevel = confidence.coverage < 50 || confidence.score === null ? "unknown" : confidence.level;
+  const confidenceLabels = { high: "Alta", medium: "Media", low: "Baja", unknown: "Sin datos" };
   article.innerHTML = `
     <div class="probability-rail" aria-hidden="true"><i></i><span></span></div>
     <div class="card-content">
@@ -179,6 +240,7 @@ function card(market) {
       <details class="market-intelligence">
         <summary>Abrir expediente</summary>
         <div class="intelligence-detail">
+          <div class="dossier-status"><span>Estado del expediente</span><strong></strong><p></p></div>
           <div class="comparison-row">
             <div><span>Polymarket</span><strong class="market-comparison"></strong></div>
             <div><span>Bid / ask</span><strong class="book-comparison"></strong></div>
@@ -192,6 +254,7 @@ function card(market) {
             <p class="gbm-note"></p>
           </div>
           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
+          <div class="dossier-proof"><span>Pruebas y procedencia</span><div></div><small></small></div>
           <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge"></strong></label>
           <small class="ev-formula">EV = probabilidad propia ÷ precio − 1 − spread estimado.</small>
           <button class="alert-button" type="button" aria-pressed="false"></button>
@@ -206,9 +269,11 @@ function card(market) {
   article.querySelector(".category").textContent = market.category || "Other";
   article.querySelector(".date").textContent = end ? date.format(end) : "Sin fecha";
   article.querySelector("h3").textContent = market.question;
-  article.querySelector(".probability-rail i").style.height = `${probability * 100}%`;
-  article.querySelector(".probability-rail span").style.bottom = `calc(${probability * 100}% - 5px)`;
-  article.querySelector(".probability-row strong").textContent = percent.format(probability);
+  article.classList.toggle("market-card-unavailable", probability === null);
+  article.querySelector(".probability-rail i").style.height = probability === null ? "0" : `${probability * 100}%`;
+  article.querySelector(".probability-rail span").hidden = probability === null;
+  if (probability !== null) article.querySelector(".probability-rail span").style.bottom = `calc(${probability * 100}% - 5px)`;
+  article.querySelector(".probability-row strong").textContent = probability === null ? "Sin dato" : percent.format(probability);
   const trendChange = article.querySelector(".trend-change");
   const hasDailyChange = intelligence.change24h !== null;
   trendChange.textContent = hasDailyChange
@@ -216,8 +281,8 @@ function card(market) {
     : "Sin dato";
   trendChange.classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
   const chart = article.querySelector(".trend-chart");
-  const observedPoints = intelligence.points || [{ hoursAgo: 0, probability }];
-  const chartOrigin = observedPoints[0].probability;
+  const observedPoints = Array.isArray(intelligence.points) ? intelligence.points.filter(point => finite(point.probability) !== null) : [];
+  const chartOrigin = observedPoints[0]?.probability ?? 0.5;
   const chartPoints = observedPoints.map((point, index) => {
     const y = Math.max(4, Math.min(50, 27 - (point.probability - chartOrigin) / .2 * 42));
     const x = observedPoints.length === 1 ? 0 : index / (observedPoints.length - 1) * 240;
@@ -225,16 +290,17 @@ function card(market) {
   });
   if (chartPoints.length === 1) chartPoints.push(`240,${chartPoints[0].split(",")[1]}`);
   chart.querySelector("polyline").setAttribute("points", chartPoints.join(" "));
-  const [lastX, lastY] = chartPoints[chartPoints.length - 1].split(",");
+  const [lastX, lastY] = chartPoints.length ? chartPoints[chartPoints.length - 1].split(",") : [0, 27];
   chart.querySelector("circle").setAttribute("cx", lastX);
   chart.querySelector("circle").setAttribute("cy", lastY);
+  chart.querySelector("circle").hidden = chartPoints.length === 0;
   chart.querySelector("title").textContent = hasDailyChange
     ? `El precio cambió ${percent.format(intelligence.change24h)} en 24 horas`
     : "Gamma no publicó una variación de 24 horas para este mercado";
   const confidenceElement = article.querySelector(".confidence");
   confidenceElement.classList.add(`confidence-${displayedLevel}`);
-  confidenceElement.textContent = `${confidenceLabels[displayedLevel] || "Baja"} · ${confidence.score}/100`;
-  confidenceElement.setAttribute("aria-label", `Calidad de señal ${confidence.score} de 100, cobertura ${confidence.coverage}%`);
+  confidenceElement.textContent = confidence.score === null ? "Sin datos" : `${confidenceLabels[displayedLevel]} · ${confidence.score}/100`;
+  confidenceElement.setAttribute("aria-label", confidence.score === null ? "Calidad de señal no disponible" : `Calidad de señal ${confidence.score} de 100, cobertura ${confidence.coverage}%`);
   const factorList = article.querySelector(".factor-list");
   for (const factor of confidence.factors || []) {
     const item = document.createElement("span");
@@ -249,7 +315,7 @@ function card(market) {
   activity.textContent = intelligence.activityScore === null ? "Sin dato" : `${activityLabels[intelligence.activityLevel]} · ${intelligence.activityScore}`;
   activity.classList.add(`risk-${intelligence.activityLevel}`);
   article.querySelector(".spread").textContent = market.spread === null ? "Sin dato" : percent.format(market.spread);
-  article.querySelector(".market-comparison").textContent = percent.format(probability);
+  article.querySelector(".market-comparison").textContent = probability === null ? "Sin dato" : percent.format(probability);
   article.querySelector(".book-comparison").textContent = market.bestBid === null || market.bestAsk === null
     ? "Sin dato"
     : `${percent.format(market.bestBid)} / ${percent.format(market.bestAsk)}`;
@@ -269,7 +335,8 @@ function card(market) {
       short_term_market: "No se ejecuta en mercados con 7 días o menos hasta el cierre.",
       market_expired: "El mercado ya alcanzó su fecha de cierre.",
       missing_expiry: "Gamma no publicó una fecha de cierre válida.",
-      price_boundary: "El precio está en un límite incompatible con el modelo."
+      price_boundary: "El precio está en un límite incompatible con el modelo.",
+      missing_price: "Gamma no publicó un precio de Sí utilizable."
     };
     gbmMeta.textContent = "No disponible";
     gbmMedian.textContent = "--";
@@ -277,6 +344,21 @@ function card(market) {
     gbmNote.textContent = reasons[gbm?.reason] || "No hay datos suficientes para ejecutar el modelo.";
   }
   article.querySelector(".why-change p").textContent = intelligence.explanation;
+  const dossier = market.signalDossier || { status: "insufficient_data", summary: "Expediente no disponible.", evidence: [], provenance: {} };
+  const dossierLabels = { attention: "Requiere atención", monitoring: "Sin anomalías", insufficient_data: "Datos insuficientes" };
+  const dossierStatus = article.querySelector(".dossier-status");
+  dossierStatus.dataset.state = dossier.status;
+  dossierStatus.querySelector("strong").textContent = dossierLabels[dossier.status] || "No evaluado";
+  dossierStatus.querySelector("p").textContent = dossier.summary;
+  const proof = article.querySelector(".dossier-proof div");
+  for (const evidence of dossier.evidence || []) {
+    const item = document.createElement("span");
+    item.textContent = `${evidence.label}: ${evidence.value === null ? "sin dato" : evidence.kind === "model" || evidence.key === "probability" || evidence.key === "change24h" ? percent.format(evidence.value) : evidence.value}`;
+    item.dataset.kind = evidence.kind;
+    proof.append(item);
+  }
+  const observedAt = safeDate(dossier.provenance?.observedAt);
+  article.querySelector(".dossier-proof small").textContent = `ID ${dossier.provenance?.marketId || "no publicado"} · Fuente ${dossier.provenance?.source || "no disponible"}${observedAt ? ` · observada ${observedAt.toLocaleString("es-ES")}` : " · fecha de observación no publicada"}`;
   const personalInput = article.querySelector(".personal-belief input");
   const personalEdge = article.querySelector(".personal-edge");
   personalInput.value = "";
@@ -287,8 +369,13 @@ function card(market) {
       personalEdge.className = "personal-edge";
       return;
     }
+    const cost = finite(market.spread);
+    if (probability === null || cost === null) {
+      personalEdge.textContent = "No calculable: falta precio o spread";
+      personalEdge.className = "personal-edge";
+      return;
+    }
     const belief = clamp(Number(personalInput.value) / 100);
-    const cost = Number(market.spread || 0);
     const value = belief / Math.max(probability, .01) - 1 - cost / Math.max(probability, .01);
     personalEdge.textContent = `${value >= 0 ? "+" : "−"}${money.format(Math.abs(value))}`;
     personalEdge.className = value >= 0 ? "personal-edge edge-positive" : "personal-edge edge-negative";
@@ -296,20 +383,24 @@ function card(market) {
   personalInput.addEventListener("input", updatePersonalEdge);
   updatePersonalEdge();
   const alertButton = article.querySelector(".alert-button");
-  const marketKey = String(market.id || `${market.question}:${market.endDate}`);
+  const key = marketKey(market);
   const updateAlertButton = () => {
-    const active = state.alerts.has(marketKey);
+    const active = state.alerts.has(key);
     alertButton.setAttribute("aria-pressed", String(active));
     alertButton.textContent = active ? "Alerta activa · desactivar" : "Vigilar cambios y anomalías";
   };
   alertButton.addEventListener("click", () => {
-    if (state.alerts.has(marketKey)) state.alerts.delete(marketKey); else state.alerts.add(marketKey);
+    if (state.alerts.has(key)) state.alerts.delete(key);
+    else state.alerts.set(key, {
+      id: key, question: market.question, endDate: market.endDate, url: market.url,
+      createdAt: new Date().toISOString(), checkedAt: new Date().toISOString(), snapshot: alertSnapshot(market), events: []
+    });
     updateAlertButton(); persistAlerts();
   });
   updateAlertButton();
   const metrics = article.querySelectorAll(".metric strong");
-  metrics[0].textContent = money.format(market.volume || 0);
-  metrics[1].textContent = money.format(market.liquidity || 0);
+  metrics[0].textContent = finite(market.volume) === null ? "Sin dato" : money.format(market.volume);
+  metrics[1].textContent = finite(market.liquidity) === null ? "Sin dato" : money.format(market.liquidity);
   article.querySelector("a").href = market.url || "https://polymarket.com";
   return article;
 }
@@ -324,21 +415,23 @@ function render() {
     return (!query || text.includes(query))
       && (state.category === "all" || market.category === state.category)
       && (state.closing === "all" || (daysToClose >= 0 && daysToClose <= Number(state.closing)))
-      && Number(market.liquidity || 0) >= state.minLiquidity
-      && (!state.opportunities || market.intelligence.activityScore >= 70);
+      && (state.minLiquidity === 0 || (finite(market.liquidity) !== null && market.liquidity >= state.minLiquidity))
+      && (!state.opportunities || finite(market.intelligence?.activityScore) >= 70);
   });
   const sorters = {
-    volume: (a, b) => b.volume - a.volume,
-    liquidity: (a, b) => b.liquidity - a.liquidity,
-    probability: (a, b) => b.probability - a.probability,
-    confidence: (a, b) => (b.confidence?.score || 0) - (a.confidence?.score || 0),
+    volume: (a, b) => (finite(b.volume) ?? -Infinity) - (finite(a.volume) ?? -Infinity),
+    liquidity: (a, b) => (finite(b.liquidity) ?? -Infinity) - (finite(a.liquidity) ?? -Infinity),
+    probability: (a, b) => (finite(b.probability) ?? -Infinity) - (finite(a.probability) ?? -Infinity),
+    confidence: (a, b) => (finite(b.confidence?.score) ?? -Infinity) - (finite(a.confidence?.score) ?? -Infinity),
     date: (a, b) => (safeDate(a.endDate)?.getTime() || Infinity) - (safeDate(b.endDate)?.getTime() || Infinity)
   };
   visible.sort(sorters[state.sort]);
   elements.grid.replaceChildren(...visible.map(card));
   elements.grid.hidden = visible.length === 0;
-  elements.empty.hidden = visible.length !== 0;
-  elements.count.textContent = `${visible.length} de ${state.markets.length} mercados`;
+  elements.empty.hidden = visible.length !== 0 || state.dataState === "error" || state.dataState === "loading";
+  elements.count.textContent = state.dataState === "error" && state.markets.length === 0
+    ? "Datos no disponibles"
+    : `${visible.length} de ${state.markets.length} mercados`;
 }
 
 function populateCategories() {
@@ -362,7 +455,7 @@ function showNotice(message) {
   elements.notice.hidden = false;
 }
 
-async function loadMarkets({ reset = false } = {}) {
+async function loadMarkets({ reset = false, refresh = false } = {}) {
   if (state.loading) return;
   state.loading = true;
   elements.loadMore.setAttribute("aria-busy", "true");
@@ -373,34 +466,43 @@ async function loadMarkets({ reset = false } = {}) {
     state.hasMore = false;
     elements.notice.hidden = true;
     elements.loading.hidden = false;
+    state.dataState = "loading";
     setDataStatus("loading", "Conectando");
   }
   try {
-    const response = await fetch(`/api/markets?limit=${PAGE_SIZE}&offset=${state.nextOffset}`, { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`API ${response.status}`);
-    const payload = await response.json();
+    const requestedLimit = refresh ? Math.max(PAGE_SIZE, Math.min(state.markets.length, 100)) : PAGE_SIZE;
+    const requestedOffset = refresh ? 0 : state.nextOffset;
+    const response = await fetch(`/api/markets?limit=${requestedLimit}&offset=${requestedOffset}`, { headers: { Accept: "application/json" } });
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json") ? await response.json() : null;
+    if (!response.ok) throw new Error(payload?.error?.message || `API ${response.status}`);
     if (!Array.isArray(payload.markets)) throw new Error("Invalid response");
-    const markets = new Map(state.markets.map(market => [market.id || `${market.question}:${market.endDate}`, market]));
+    const markets = new Map((reset || refresh ? [] : state.markets).map(market => [marketKey(market), market]));
     const previousSize = markets.size;
     payload.markets.forEach(market => {
       if (!market.intelligence || market.intelligence.source !== "gamma") throw new Error("Invalid intelligence response");
-      markets.set(market.id || `${market.question}:${market.endDate}`, market);
+      if (!market.signalDossier || !["attention", "monitoring", "insufficient_data"].includes(market.signalDossier.status)) throw new Error("Invalid signal dossier response");
+      evaluateWatchedMarket(market);
+      markets.set(marketKey(market), market);
     });
     state.markets = [...markets.values()];
     state.hasMore = payload.hasMore === true;
     state.nextOffset = Number(payload.nextOffset);
-    if (state.hasMore && (!Number.isSafeInteger(state.nextOffset) || state.nextOffset < 0 || markets.size === previousSize)) throw new Error("Invalid pagination response");
+    if (state.hasMore && (!Number.isSafeInteger(state.nextOffset) || state.nextOffset < 0 || (!refresh && markets.size === previousSize))) throw new Error("Invalid pagination response");
     const dataTime = safeDate(payload.dataAsOf);
     setDataStatus("live", dataTime
       ? `Gamma · ${dataTime.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`
       : "Gamma en directo");
+    state.dataState = payload.dataStatus === "empty" ? "empty" : "live";
     elements.notice.hidden = true;
   } catch (error) {
     console.warn("Live market data unavailable:", error);
     if (state.markets.length === 0) {
+      state.dataState = "error";
       setDataStatus("error", "Datos no disponibles");
       showNotice("Gamma no responde en este momento. No se muestran datos ficticios.");
     } else {
+      state.dataState = "partial";
       setDataStatus("partial", "Datos parciales");
       showNotice("La carga se interrumpió. Conservamos los mercados recuperados.");
     }
@@ -446,6 +548,12 @@ projectionLayer?.addEventListener("toggle", () => {
 setInterval(() => {
   if (document.visibilityState === "visible" && projectionLayer?.open) loadProjection();
 }, 5 * 60 * 1000);
+setInterval(() => {
+  if (document.visibilityState === "visible" && !state.loading) loadMarkets({ refresh: true });
+}, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.markets.length && !state.loading) loadMarkets({ refresh: true });
+});
 document.querySelector('a[href="#alerts"]')?.addEventListener("click", () => {
   document.querySelector("#alert-layer").open = true;
 });

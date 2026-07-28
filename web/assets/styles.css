@@ -264,6 +264,7 @@ h2 { margin: 0; color: var(--deep); font: var(--type-heading); text-transform: u
 .confidence-high { color: var(--status-high); }
 .confidence-medium { color: var(--status-medium); }
 .confidence-low { color: var(--status-low); }
+.confidence-unknown { color: var(--muted); }
 .confidence-details { margin-bottom: .7rem; color: var(--muted); font-size: var(--font-size-body-sm); }
 .confidence-details summary { width: max-content; min-height: 44px; display: flex; align-items: center; color: var(--blueprint); cursor: pointer; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .factor-list { margin: .65rem 0 .45rem; display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -309,6 +310,18 @@ h2 { margin: 0; color: var(--deep); font: var(--type-heading); text-transform: u
 .gbm-note { margin: .65rem 0 0; color: var(--line); font: var(--type-label-xs); }
 .why-change { margin: .8rem 0; padding-top: .8rem; border-top: 1px solid var(--line); }
 .why-change p { margin: .35rem 0 0; font: var(--type-body-sm); }
+.dossier-status { margin-bottom: .8rem; padding: .7rem; border-left: 3px solid var(--status-high); background: var(--white); }
+.dossier-status[data-state="attention"] { border-color: var(--amber); }
+.dossier-status[data-state="insufficient_data"] { border-color: var(--muted); }
+.dossier-status span, .dossier-proof > span { display: block; color: var(--muted); font: var(--type-label-xs); font-weight: var(--font-weight-bold); text-transform: uppercase; }
+.dossier-status strong { display: block; margin-top: .25rem; color: var(--deep); font: var(--type-label); text-transform: uppercase; }
+.dossier-status p { margin: .35rem 0 0; font: var(--type-label-xs); }
+.dossier-proof { margin: .8rem 0; padding-top: .8rem; border-top: 1px solid var(--line); }
+.dossier-proof div { margin: .5rem 0; display: flex; flex-wrap: wrap; gap: .35rem; }
+.dossier-proof div span { padding: .3rem .4rem; background: var(--white); border: 1px solid var(--line); font: var(--type-label-xs); }
+.dossier-proof div span[data-kind="model"] { color: var(--blueprint); border-color: var(--blueprint); }
+.dossier-proof small { display: block; overflow-wrap: anywhere; color: var(--muted); font: var(--type-label-xs); }
+.market-card-unavailable .probability-rail { background: repeating-linear-gradient(135deg, #dbe1ed 0 6px, #f1f4f9 6px 12px); }
 .personal-belief { display: grid; grid-template-columns: 1fr 70px; align-items: end; gap: .7rem; }
 .personal-belief input { width: 100%; min-height: 40px; padding: 0 .5rem; background: var(--white); border: 1px solid var(--muted); border-radius: 0; }
 .ev-formula { display: block; margin-top: .45rem; color: var(--muted); font: var(--type-label-xs); }
