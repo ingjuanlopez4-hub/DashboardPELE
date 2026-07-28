@@ -20,6 +20,7 @@ const elements = {
   opportunities: document.querySelector("#opportunities"), loadMore: document.querySelector("#load-more"),
   dataStatus: document.querySelector("#data-status"), dataStatusLabel: document.querySelector("#data-status-label"),
   alertCount: document.querySelector("#alert-count"), alertDeskCount: document.querySelector("#alert-desk-count"),
+  alertLayerCount: document.querySelector("#alert-layer-count"),
   filters: document.querySelector("#filters"), filterToggle: document.querySelector("#filter-toggle")
 };
 const projectionElements = {
@@ -52,6 +53,7 @@ function persistAlerts() {
   elements.alertDeskCount.textContent = state.alerts.size
     ? `${state.alerts.size} ${state.alerts.size === 1 ? "mercado vigilado" : "mercados vigilados"}`
     : "Sin mercados vigilados";
+  elements.alertLayerCount.textContent = `${state.alerts.size} ${state.alerts.size === 1 ? "mercado vigilado" : "mercados vigilados"}`;
   const eventDesk = document.querySelector("#alert-events");
   const events = state.markets.filter(market => state.alerts.has(String(market.id || `${market.question}:${market.endDate}`))).map(market => {
     const triggers = [];
@@ -433,8 +435,20 @@ elements.filterToggle.addEventListener("click", () => {
   elements.filters.dataset.mobileCollapsed = String(!expanded);
 });
 projectionElements.form?.addEventListener("submit", event => { event.preventDefault(); loadProjection(); });
-setInterval(() => { if (document.visibilityState === "visible") loadProjection(); }, 5 * 60 * 1000);
+const projectionLayer = document.querySelector("#projection-layer");
+let projectionInitialized = false;
+projectionLayer?.addEventListener("toggle", () => {
+  if (projectionLayer.open && !projectionInitialized) {
+    projectionInitialized = true;
+    loadProjection();
+  }
+});
+setInterval(() => {
+  if (document.visibilityState === "visible" && projectionLayer?.open) loadProjection();
+}, 5 * 60 * 1000);
+document.querySelector('a[href="#alerts"]')?.addEventListener("click", () => {
+  document.querySelector("#alert-layer").open = true;
+});
 
 persistAlerts();
 loadMarkets({ reset: true });
-loadProjection();
