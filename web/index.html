@@ -2,8 +2,8 @@
 <!--
   THESIS: PELE pasa de fotografiar cuotas a revelar dirección, concentración y fiabilidad; evita el dashboard de métricas aisladas.
   OWN-WORLD: Sala de señales azul, paneles rectos, rieles medibles y ámbar reservado a decisiones o anomalías.
-  STORY: El usuario detecta qué cambió, comprueba quién mueve el dinero, contrasta la señal y activa vigilancia.
-  FIRST VIEWPORT: La tesis editorial y la escala de probabilidad permanecen intactas; la inteligencia verificable comienza justo después.
+  STORY: El usuario detecta qué cambió, identifica la señal dominante, contrasta la lectura y activa vigilancia.
+  FIRST VIEWPORT: La tesis editorial se comprime para que el radar operativo comience dentro del primer viewport.
   FORM: Extensión Operate del sistema existente, organizada como radar y expedientes desplegables en lugar de una nueva identidad.
 -->
 <html lang="es">
@@ -17,8 +17,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Instrument+Sans:wdth,wght@75..100,400..700&family=League+Gothic&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/styles.css?v=2">
-  <script src="/assets/app.js?v=2" defer></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=3">
+  <script src="/assets/market-math.js?v=3" defer></script>
+  <script src="/assets/app.js?v=3" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#markets">Saltar a mercados</a>
@@ -29,6 +30,7 @@
     </a>
       <div class="topbar-meta">
         <span class="edition">Gamma / mercados abiertos</span>
+        <a class="radar-shortcut" href="#markets">Abrir radar <span aria-hidden="true">↓</span></a>
         <a class="alert-counter" href="#alerts" aria-label="Ir al centro de alertas"><span id="alert-count">0</span> alertas</a>
         <div class="live-indicator" id="data-status" data-state="loading" role="status">
         <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
@@ -46,22 +48,15 @@
           <a class="hero-link" href="#markets">Encontrar una señal <span aria-hidden="true">↓</span></a>
         </div>
       </div>
-      <div class="verdict" id="verdict" style="--yes: 50%" aria-label="Consenso agregado de los mercados observados">
-        <div class="verdict-caption"><span>Consenso agregado</span><span>Precio vivo / muestra actual</span></div>
+      <div class="verdict" id="verdict" style="--yes: 50%" aria-label="Media simple de la muestra observada">
+        <div class="verdict-caption"><span>Media simple de la muestra</span><span>Sin ponderar / contratos cargados</span></div>
         <div class="verdict-contract">
           <div class="verdict-yes"><span>SÍ</span><strong id="verdict-yes">50%</strong></div>
           <div class="verdict-no"><span>NO</span><strong id="verdict-no">50%</strong></div>
           <i class="verdict-seam" aria-hidden="true"><b></b></i>
         </div>
-        <p>La costura se mueve con el precio medio. No indica certeza: indica cuánto paga hoy el mercado por creer.</p>
+        <p>Media aritmética sin ponderar de los contratos cargados. No representa consenso del mercado ni certeza.</p>
       </div>
-    </section>
-
-    <section class="kpis" aria-label="Resumen de mercados">
-      <article><span>En radar</span><strong id="kpi-count">--</strong><small>mercados abiertos</small></article>
-      <article><span>Volumen observado</span><strong id="kpi-volume">--</strong><small>acumulado</small></article>
-      <article><span>Capital disponible</span><strong id="kpi-liquidity">--</strong><small>liquidez actual</small></article>
-      <article><span>Consenso medio</span><strong id="kpi-probability">--</strong><small>probabilidad de “Sí”</small></article>
     </section>
 
     <section class="workspace" id="markets" aria-labelledby="markets-title">
@@ -106,18 +101,33 @@
         <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Actividad inusual</b><small>Presión observada ≥ 70/100</small></span></label>
       </form>
 
+      <section class="comparison-panel" id="comparison-panel" hidden aria-labelledby="comparison-title">
+        <header>
+          <div><span>Comparación fijada</span><h3 id="comparison-title">Señales lado a lado</h3></div>
+          <p id="comparison-status" role="status" aria-live="polite">Fija hasta 3 mercados desde las tarjetas.</p>
+        </header>
+        <div class="comparison-items" id="comparison-items"></div>
+      </section>
+
       <div id="notice" class="notice" hidden role="status"></div>
       <div id="loading" class="market-grid" aria-label="Cargando mercados" aria-busy="true">
         <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       </div>
       <div id="empty" class="empty" hidden>
-        <strong>Ese mercado no está en el radar</strong><p>Prueba otra pregunta o vuelve a ver la muestra completa.</p>
+        <strong id="empty-title">Ese mercado no está en el radar</strong><p id="empty-copy">Prueba otra pregunta o vuelve a ver la muestra completa.</p>
         <button id="reset" type="button">Restablecer filtros</button>
       </div>
       <div id="market-grid" class="market-grid" hidden></div>
       <div class="market-actions">
         <button id="load-more" class="secondary-button" type="button" hidden>Cargar más mercados</button>
       </div>
+    </section>
+
+    <section class="kpis" aria-label="Resumen de mercados">
+      <article><span>En radar</span><strong id="kpi-count">--</strong><small>mercados abiertos</small></article>
+      <article><span>Volumen observado</span><strong id="kpi-volume">--</strong><small>acumulado</small></article>
+      <article><span>Capital disponible</span><strong id="kpi-liquidity">--</strong><small>liquidez actual</small></article>
+      <article><span>Media simple</span><strong id="kpi-probability">--</strong><small>muestra cargada, sin ponderar</small></article>
     </section>
 
     <section class="secondary-tools" aria-labelledby="secondary-tools-title">

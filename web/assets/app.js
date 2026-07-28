@@ -1,6 +1,7 @@
 "use strict";
 
 const PAGE_SIZE = 10;
+const { expectedReturn, simpleAverage } = globalThis.PeleMarketMath;
 
 const storedAlerts = (() => {
   try {
@@ -15,7 +16,7 @@ const storedAlerts = (() => {
 const state = {
   markets: [], search: "", category: "all", closing: "all", minLiquidity: 0,
   opportunities: false, sort: "volume", nextOffset: 0, hasMore: false, loading: false,
-  alerts: storedAlerts, dataState: "loading"
+  alerts: storedAlerts, dataState: "loading", marketUi: new Map(), comparison: new Set()
 };
 const elements = {
   grid: document.querySelector("#market-grid"), loading: document.querySelector("#loading"),
@@ -27,7 +28,10 @@ const elements = {
   dataStatus: document.querySelector("#data-status"), dataStatusLabel: document.querySelector("#data-status-label"),
   alertCount: document.querySelector("#alert-count"), alertDeskCount: document.querySelector("#alert-desk-count"),
   alertLayerCount: document.querySelector("#alert-layer-count"),
-  filters: document.querySelector("#filters"), filterToggle: document.querySelector("#filter-toggle")
+  filters: document.querySelector("#filters"), filterToggle: document.querySelector("#filter-toggle"),
+  comparisonPanel: document.querySelector("#comparison-panel"), comparisonItems: document.querySelector("#comparison-items"),
+  comparisonStatus: document.querySelector("#comparison-status"), emptyTitle: document.querySelector("#empty-title"),
+  emptyCopy: document.querySelector("#empty-copy"), reset: document.querySelector("#reset")
 };
 const projectionElements = {
   form: document.querySelector("#projection-form"), symbol: document.querySelector("#projection-symbol"),
@@ -134,14 +138,14 @@ function updateKpis() {
   document.querySelector("#kpi-volume").textContent = values("volume").length ? money.format(total("volume")) : "Sin dato";
   document.querySelector("#kpi-liquidity").textContent = values("liquidity").length ? money.format(total("liquidity")) : "Sin dato";
   const probabilities = values("probability");
-  const average = probabilities.length ? probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length : null;
+  const average = simpleAverage(probabilities);
   document.querySelector("#kpi-probability").textContent = average === null ? "Sin dato" : percent.format(average);
   const verdict = document.querySelector("#verdict");
   const yes = average === null ? 50 : Math.round(average * 100);
   verdict.style.setProperty("--yes", `${yes}%`);
   document.querySelector("#verdict-yes").textContent = average === null ? "--" : `${yes}%`;
   document.querySelector("#verdict-no").textContent = average === null ? "--" : `${100 - yes}%`;
-  verdict.setAttribute("aria-label", average === null ? "Consenso agregado no disponible" : `Consenso agregado: Sí ${yes}%, No ${100 - yes}%`);
+  verdict.setAttribute("aria-label", average === null ? "Media simple de la muestra no disponible" : `Media simple sin ponderar de la muestra: Sí ${yes}%, No ${100 - yes}%`);
   const covered = state.markets.filter(market => market.intelligence?.change24h !== null).length;
   const coverage = state.markets.length ? Math.round(covered / state.markets.length * 100) : 0;
   document.querySelector("#coverage-rate").innerHTML = `${coverage}<span>%</span>`;
@@ -211,6 +215,8 @@ function card(market) {
   const article = document.createElement("article");
   article.className = "market-card";
   const end = safeDate(market.endDate);
+  const key = marketKey(market);
+  const savedUi = state.marketUi.get(key) || {};
   const rawProbability = finite(market.probability);
   const probability = rawProbability === null ? null : clamp(rawProbability);
   const confidence = market.confidence || { score: null, level: "unknown", coverage: 0, factors: [] };
@@ -222,8 +228,16 @@ function card(market) {
     <div class="card-content">
       <div class="card-top"><span class="category"></span><span class="date"></span></div>
       <h3></h3>
-      <div class="probability-row"><span>El mercado dice “Sí”</span><strong></strong></div>
-      <div class="model-readout" aria-label="Lecturas derivadas de datos de mercado">
+      <div class="scan-strip" aria-label="Resumen comparable">
+        <div><span>Prob. Sí</span><strong class="scan-probability"></strong></div>
+        <div><span>Cambio 24h</span><strong class="scan-change"></strong></div>
+        <div><span>Solidez</span><strong class="scan-confidence"></strong></div>
+      </div>
+      <p class="scan-reason"><span>Señal principal</span><strong></strong></p>
+      <button class="compare-button" type="button" aria-pressed="false"></button>
+      <details class="signal-details">
+        <summary>Lectura completa</summary>
+        <div class="model-readout" aria-label="Lecturas derivadas de datos de mercado">
         <div class="readout-label"><span>Lectura PELE</span><small>Datos Gamma + cálculo</small></div>
         <div class="trend-block">
           <div class="trend-head"><span>Convicción · 24h</span><strong class="trend-change"></strong></div>
@@ -235,7 +249,8 @@ function card(market) {
           <div><span>Presión actividad</span><strong class="activity-pressure"></strong></div>
           <div><span>Spread</span><strong class="spread"></strong></div>
         </div>
-      </div>
+        </div>
+      </details>
       <details class="confidence-details"><summary>Cómo se calcula</summary><div class="factor-list"></div><small></small></details>
       <details class="market-intelligence">
         <summary>Abrir expediente</summary>
@@ -255,8 +270,8 @@ function card(market) {
           </div>
           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
           <div class="dossier-proof"><span>Pruebas y procedencia</span><div></div><small></small></div>
-          <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge"></strong></label>
-          <small class="ev-formula">EV = probabilidad propia ÷ precio − 1 − spread estimado.</small>
+          <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge" role="status" aria-live="polite"></strong></label>
+          <small class="ev-formula">Retorno relativo estimado = (probabilidad propia − spread) ÷ precio − 1. No es una cantidad en dólares.</small>
           <button class="alert-button" type="button" aria-pressed="false"></button>
         </div>
       </details>
@@ -273,13 +288,15 @@ function card(market) {
   article.querySelector(".probability-rail i").style.height = probability === null ? "0" : `${probability * 100}%`;
   article.querySelector(".probability-rail span").hidden = probability === null;
   if (probability !== null) article.querySelector(".probability-rail span").style.bottom = `calc(${probability * 100}% - 5px)`;
-  article.querySelector(".probability-row strong").textContent = probability === null ? "Sin dato" : percent.format(probability);
+  article.querySelector(".scan-probability").textContent = probability === null ? "Sin dato" : percent.format(probability);
   const trendChange = article.querySelector(".trend-change");
   const hasDailyChange = intelligence.change24h !== null;
   trendChange.textContent = hasDailyChange
     ? `${intelligence.change24h >= 0 ? "+" : "−"}${percent.format(Math.abs(intelligence.change24h))}`
     : "Sin dato";
   trendChange.classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
+  article.querySelector(".scan-change").textContent = trendChange.textContent;
+  article.querySelector(".scan-change").classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
   const chart = article.querySelector(".trend-chart");
   const observedPoints = Array.isArray(intelligence.points) ? intelligence.points.filter(point => finite(point.probability) !== null) : [];
   const chartOrigin = observedPoints[0]?.probability ?? 0.5;
@@ -301,6 +318,7 @@ function card(market) {
   confidenceElement.classList.add(`confidence-${displayedLevel}`);
   confidenceElement.textContent = confidence.score === null ? "Sin datos" : `${confidenceLabels[displayedLevel]} · ${confidence.score}/100`;
   confidenceElement.setAttribute("aria-label", confidence.score === null ? "Calidad de señal no disponible" : `Calidad de señal ${confidence.score} de 100, cobertura ${confidence.coverage}%`);
+  article.querySelector(".scan-confidence").textContent = confidence.score === null ? "Sin dato" : `${confidence.score}/100`;
   const factorList = article.querySelector(".factor-list");
   for (const factor of confidence.factors || []) {
     const item = document.createElement("span");
@@ -315,6 +333,14 @@ function card(market) {
   activity.textContent = intelligence.activityScore === null ? "Sin dato" : `${activityLabels[intelligence.activityLevel]} · ${intelligence.activityScore}`;
   activity.classList.add(`risk-${intelligence.activityLevel}`);
   article.querySelector(".spread").textContent = market.spread === null ? "Sin dato" : percent.format(market.spread);
+  const signalReason = market.signalDossier?.status === "attention"
+    ? (market.signalDossier.triggers?.[0]?.label || intelligence.explanation)
+    : intelligence.activityScore >= 70
+      ? `Actividad inusual · ${intelligence.activityScore}/100`
+      : hasDailyChange
+        ? `Movimiento de ${trendChange.textContent} en 24h`
+        : "Sin anomalías observables";
+  article.querySelector(".scan-reason strong").textContent = signalReason;
   article.querySelector(".market-comparison").textContent = probability === null ? "Sin dato" : percent.format(probability);
   article.querySelector(".book-comparison").textContent = market.bestBid === null || market.bestAsk === null
     ? "Sin dato"
@@ -361,7 +387,7 @@ function card(market) {
   article.querySelector(".dossier-proof small").textContent = `ID ${dossier.provenance?.marketId || "no publicado"} · Fuente ${dossier.provenance?.source || "no disponible"}${observedAt ? ` · observada ${observedAt.toLocaleString("es-ES")}` : " · fecha de observación no publicada"}`;
   const personalInput = article.querySelector(".personal-belief input");
   const personalEdge = article.querySelector(".personal-edge");
-  personalInput.value = "";
+  personalInput.value = savedUi.belief || "";
   personalInput.placeholder = "1–99";
   const updatePersonalEdge = () => {
     if (personalInput.value === "") {
@@ -376,14 +402,16 @@ function card(market) {
       return;
     }
     const belief = clamp(Number(personalInput.value) / 100);
-    const value = belief / Math.max(probability, .01) - 1 - cost / Math.max(probability, .01);
-    personalEdge.textContent = `${value >= 0 ? "+" : "−"}${money.format(Math.abs(value))}`;
+    const value = expectedReturn(belief, probability, cost);
+    personalEdge.textContent = `${value >= 0 ? "+" : "−"}${percent.format(Math.abs(value))} retorno relativo`;
     personalEdge.className = value >= 0 ? "personal-edge edge-positive" : "personal-edge edge-negative";
   };
-  personalInput.addEventListener("input", updatePersonalEdge);
+  personalInput.addEventListener("input", () => {
+    state.marketUi.set(key, { ...(state.marketUi.get(key) || {}), belief: personalInput.value });
+    updatePersonalEdge();
+  });
   updatePersonalEdge();
   const alertButton = article.querySelector(".alert-button");
-  const key = marketKey(market);
   const updateAlertButton = () => {
     const active = state.alerts.has(key);
     alertButton.setAttribute("aria-pressed", String(active));
@@ -398,11 +426,67 @@ function card(market) {
     updateAlertButton(); persistAlerts();
   });
   updateAlertButton();
+  const details = {
+    signal: article.querySelector(".signal-details"),
+    confidence: article.querySelector(".confidence-details"),
+    dossier: article.querySelector(".market-intelligence")
+  };
+  for (const [name, detail] of Object.entries(details)) {
+    detail.open = Boolean(savedUi[name]);
+    detail.addEventListener("toggle", () => {
+      state.marketUi.set(key, { ...(state.marketUi.get(key) || {}), [name]: detail.open });
+    });
+  }
+  const compareButton = article.querySelector(".compare-button");
+  const updateCompareButton = () => {
+    const active = state.comparison.has(key);
+    compareButton.setAttribute("aria-pressed", String(active));
+    compareButton.textContent = active ? "Quitar de comparación" : "Fijar para comparar";
+  };
+  compareButton.addEventListener("click", () => {
+    if (state.comparison.has(key)) state.comparison.delete(key);
+    else if (state.comparison.size < 3) state.comparison.add(key);
+    else {
+      elements.comparisonStatus.textContent = "Ya hay 3 mercados fijados. Quita uno para sustituirlo.";
+      return;
+    }
+    updateCompareButton();
+    renderComparison();
+  });
+  updateCompareButton();
   const metrics = article.querySelectorAll(".metric strong");
   metrics[0].textContent = finite(market.volume) === null ? "Sin dato" : money.format(market.volume);
   metrics[1].textContent = finite(market.liquidity) === null ? "Sin dato" : money.format(market.liquidity);
   article.querySelector("a").href = market.url || "https://polymarket.com";
   return article;
+}
+
+function renderComparison() {
+  const compared = [...state.comparison]
+    .map(key => state.markets.find(market => marketKey(market) === key))
+    .filter(Boolean);
+  elements.comparisonPanel.hidden = compared.length === 0;
+  elements.comparisonStatus.textContent = compared.length
+    ? `${compared.length} de 3 mercados fijados.`
+    : "Fija hasta 3 mercados desde las tarjetas.";
+  elements.comparisonItems.replaceChildren(...compared.map(market => {
+    const item = document.createElement("article");
+    const probability = finite(market.probability);
+    const change = finite(market.intelligence?.change24h);
+    const confidence = finite(market.confidence?.score);
+    item.innerHTML = `<h4></h4><dl><div><dt>Prob. Sí</dt><dd></dd></div><div><dt>Cambio 24h</dt><dd></dd></div><div><dt>Solidez</dt><dd></dd></div><div><dt>Spread</dt><dd></dd></div></dl><button type="button">Quitar</button>`;
+    item.querySelector("h4").textContent = market.question;
+    const values = item.querySelectorAll("dd");
+    values[0].textContent = probability === null ? "Sin dato" : percent.format(probability);
+    values[1].textContent = change === null ? "Sin dato" : `${change >= 0 ? "+" : "−"}${percent.format(Math.abs(change))}`;
+    values[2].textContent = confidence === null ? "Sin dato" : `${confidence}/100`;
+    values[3].textContent = finite(market.spread) === null ? "Sin dato" : percent.format(market.spread);
+    item.querySelector("button").addEventListener("click", () => {
+      state.comparison.delete(marketKey(market));
+      render();
+    });
+    return item;
+  }));
 }
 
 function render() {
@@ -427,11 +511,16 @@ function render() {
   };
   visible.sort(sorters[state.sort]);
   elements.grid.replaceChildren(...visible.map(card));
+  renderComparison();
   elements.grid.hidden = visible.length === 0;
   elements.empty.hidden = visible.length !== 0 || state.dataState === "error" || state.dataState === "loading";
   elements.count.textContent = state.dataState === "error" && state.markets.length === 0
     ? "Datos no disponibles"
     : `${visible.length} de ${state.markets.length} mercados`;
+  const sourceEmpty = state.dataState === "empty" && state.markets.length === 0;
+  elements.emptyTitle.textContent = sourceEmpty ? "Gamma no devolvió mercados abiertos" : "Ese mercado no está en el radar";
+  elements.emptyCopy.textContent = sourceEmpty ? "La fuente respondió correctamente, pero la muestra está vacía. Vuelve a intentarlo más tarde." : "Prueba otra pregunta o vuelve a ver la muestra completa.";
+  elements.reset.hidden = sourceEmpty;
 }
 
 function populateCategories() {
@@ -524,7 +613,7 @@ elements.closing.addEventListener("change", event => { state.closing = event.tar
 elements.minLiquidity.addEventListener("change", event => { state.minLiquidity = Number(event.target.value); render(); });
 elements.opportunities.addEventListener("change", event => { state.opportunities = event.target.checked; render(); });
 elements.sort.addEventListener("change", event => { state.sort = event.target.value; render(); });
-document.querySelector("#reset").addEventListener("click", () => {
+elements.reset.addEventListener("click", () => {
   state.search = ""; state.category = "all"; state.closing = "all"; state.minLiquidity = 0; state.opportunities = false; state.sort = "volume";
   elements.search.value = ""; elements.category.value = "all"; elements.closing.value = "all";
   elements.minLiquidity.value = "0"; elements.opportunities.checked = false; elements.sort.value = "volume"; render();

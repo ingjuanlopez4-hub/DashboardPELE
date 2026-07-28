@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { MarketDataError, calculateConfidence, calculateGbmProjection, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
 const { createWebServer } = require("../scripts/web_server");
+const { expectedReturn, simpleAverage } = require("../web/assets/market-math");
 
 const RAW_MARKET = {
   id: "42",
@@ -20,6 +21,18 @@ const RAW_MARKET = {
   updatedAt: "2026-07-26T12:30:00Z",
   events: [{ slug: "bitcoin-price-in-2027" }]
 };
+
+test("calculates relative expected return without assigning a currency", () => {
+  assert.equal(expectedReturn(0.8, 0.5, 0.02), 0.56);
+  assert.ok(Math.abs(expectedReturn(0.4, 0.5, 0.02) + 0.24) < Number.EPSILON);
+  assert.equal(expectedReturn(0.8, 0, 0.02), null);
+});
+
+test("calculates an unweighted sample average", () => {
+  assert.equal(simpleAverage([0.2, 0.5, 0.8]), 0.5);
+  assert.equal(simpleAverage([]), null);
+  assert.equal(simpleAverage([0.2, null, "bad", 0.8]), 0.5);
+});
 
 test("normalizes Gamma string arrays, numbers, category, and URL", () => {
   const market = normalizeMarket(RAW_MARKET);
