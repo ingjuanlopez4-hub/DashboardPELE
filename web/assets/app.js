@@ -15,7 +15,7 @@ const storedAlerts = (() => {
 })();
 const state = {
   markets: [], search: "", category: "all", closing: "all", minLiquidity: 0,
-  opportunities: false, sort: "volume", nextOffset: 0, hasMore: false, loading: false,
+  opportunities: false, sort: "activity", nextOffset: 0, hasMore: false, loading: false,
   alerts: storedAlerts, dataState: "loading", marketUi: new Map(), comparison: new Set()
 };
 const elements = {
@@ -228,19 +228,20 @@ function card(market) {
     <div class="card-content">
       <div class="card-top"><span class="category"></span><span class="date"></span></div>
       <h3></h3>
-      <div class="scan-strip" aria-label="Resumen comparable">
-        <div><span>Prob. Sí</span><strong class="scan-probability"></strong></div>
-        <div><span>Cambio 24h</span><strong class="scan-change"></strong></div>
-        <div><span>Solidez</span><strong class="scan-confidence"></strong></div>
+       <div class="scan-strip" aria-label="Resumen comparable">
+         <div><span>Prob. Sí</span><strong class="scan-probability"></strong></div>
+         <div><span>Cambio 24h</span><strong class="scan-change"></strong></div>
+         <div><span>Intensidad</span><strong class="scan-activity"></strong></div>
+         <div><span>Solidez</span><strong class="scan-confidence"></strong></div>
       </div>
-      <p class="scan-reason"><span>Señal principal</span><strong></strong></p>
+      <p class="scan-reason"><span>Qué merece atención</span><strong></strong></p>
       <button class="compare-button" type="button" aria-pressed="false"></button>
       <details class="signal-details">
-        <summary>Lectura completa</summary>
+        <summary>Ver lectura completa</summary>
         <div class="model-readout" aria-label="Lecturas derivadas de datos de mercado">
         <div class="readout-label"><span>Lectura PELE</span><small>Datos Gamma + cálculo</small></div>
         <div class="trend-block">
-          <div class="trend-head"><span>Convicción · 24h</span><strong class="trend-change"></strong></div>
+          <div class="trend-head"><span>Precio de Sí · cambio en 24 h</span><strong class="trend-change"></strong></div>
           <svg class="trend-chart" viewBox="0 0 240 54" preserveAspectRatio="none" role="img"><title></title><line class="baseline" x1="0" y1="27" x2="240" y2="27"></line><polyline class="trend-line"></polyline><circle class="trend-dot" r="3.5"></circle></svg>
         </div>
         <div class="confidence-row"><span>Solidez de la señal</span><strong class="confidence"></strong></div>
@@ -251,7 +252,7 @@ function card(market) {
         </div>
         </div>
       </details>
-      <details class="confidence-details"><summary>Cómo se calcula</summary><div class="factor-list"></div><small></small></details>
+      <details class="confidence-details"><summary>Ver cálculo de solidez</summary><div class="factor-list"></div><small></small></details>
       <details class="market-intelligence">
         <summary>Abrir expediente</summary>
         <div class="intelligence-detail">
@@ -263,14 +264,14 @@ function card(market) {
           <div class="gbm-projection">
             <div class="gbm-heading"><span>Movimiento Browniano Geométrico</span><small class="gbm-meta"></small></div>
             <div class="gbm-values">
-              <div><span>Mediana al cierre</span><strong class="gbm-median"></strong></div>
-              <div><span>Rango P5–P95</span><strong class="gbm-range"></strong></div>
+              <div><span>Mediana simulada al cierre</span><strong class="gbm-median"></strong></div>
+              <div><span>Rango simulado P5–P95</span><strong class="gbm-range"></strong></div>
             </div>
             <p class="gbm-note"></p>
           </div>
           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
           <div class="dossier-proof"><span>Pruebas y procedencia</span><div></div><small></small></div>
-          <label class="personal-belief"><span>Tu estimación (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge" role="status" aria-live="polite"></strong></label>
+          <label class="personal-belief"><span>Tu probabilidad estimada de Sí (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge" role="status" aria-live="polite"></strong></label>
           <small class="ev-formula">Retorno relativo estimado = (probabilidad propia − spread) ÷ precio − 1. No es una cantidad en dólares.</small>
           <button class="alert-button" type="button" aria-pressed="false"></button>
         </div>
@@ -278,7 +279,7 @@ function card(market) {
       <div class="card-footer">
         <div class="metric"><span>Volumen</span><strong></strong></div>
         <div class="metric"><span>Liquidez</span><strong></strong></div>
-        <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket"><span>Ver mercado</span> &#8599;</a>
+          <a class="market-link" target="_blank" rel="noopener noreferrer" aria-label="Abrir mercado en Polymarket"><span>Abrir en Polymarket</span> &#8599;</a>
       </div>
     </div>`;
   article.querySelector(".category").textContent = market.category || "Other";
@@ -297,6 +298,7 @@ function card(market) {
   trendChange.classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
   article.querySelector(".scan-change").textContent = trendChange.textContent;
   article.querySelector(".scan-change").classList.toggle("down", hasDailyChange && intelligence.change24h < 0);
+  article.querySelector(".scan-activity").textContent = intelligence.activityScore === null ? "Sin dato" : `${intelligence.activityScore}/100`;
   const chart = article.querySelector(".trend-chart");
   const observedPoints = Array.isArray(intelligence.points) ? intelligence.points.filter(point => finite(point.probability) !== null) : [];
   const chartOrigin = observedPoints[0]?.probability ?? 0.5;
@@ -336,7 +338,7 @@ function card(market) {
   const signalReason = market.signalDossier?.status === "attention"
     ? (market.signalDossier.triggers?.[0]?.label || intelligence.explanation)
     : intelligence.activityScore >= 70
-      ? `Actividad inusual · ${intelligence.activityScore}/100`
+      ? `Actividad alta · ${intelligence.activityScore}/100`
       : hasDailyChange
         ? `Movimiento de ${trendChange.textContent} en 24h`
         : "Sin anomalías observables";
@@ -415,7 +417,7 @@ function card(market) {
   const updateAlertButton = () => {
     const active = state.alerts.has(key);
     alertButton.setAttribute("aria-pressed", String(active));
-    alertButton.textContent = active ? "Alerta activa · desactivar" : "Vigilar cambios y anomalías";
+    alertButton.textContent = active ? "Dejar de vigilar" : "Vigilar cambios y anomalías";
   };
   alertButton.addEventListener("click", () => {
     if (state.alerts.has(key)) state.alerts.delete(key);
@@ -474,7 +476,7 @@ function renderComparison() {
     const probability = finite(market.probability);
     const change = finite(market.intelligence?.change24h);
     const confidence = finite(market.confidence?.score);
-    item.innerHTML = `<h4></h4><dl><div><dt>Prob. Sí</dt><dd></dd></div><div><dt>Cambio 24h</dt><dd></dd></div><div><dt>Solidez</dt><dd></dd></div><div><dt>Spread</dt><dd></dd></div></dl><button type="button">Quitar</button>`;
+    item.innerHTML = `<h4></h4><dl><div><dt>Precio de Sí</dt><dd></dd></div><div><dt>Cambio 24 h</dt><dd></dd></div><div><dt>Solidez</dt><dd></dd></div><div><dt>Spread</dt><dd></dd></div></dl><button type="button">Quitar</button>`;
     item.querySelector("h4").textContent = market.question;
     const values = item.querySelectorAll("dd");
     values[0].textContent = probability === null ? "Sin dato" : percent.format(probability);
@@ -503,6 +505,7 @@ function render() {
       && (!state.opportunities || finite(market.intelligence?.activityScore) >= 70);
   });
   const sorters = {
+    activity: (a, b) => (finite(b.intelligence?.activityScore) ?? -Infinity) - (finite(a.intelligence?.activityScore) ?? -Infinity),
     volume: (a, b) => (finite(b.volume) ?? -Infinity) - (finite(a.volume) ?? -Infinity),
     liquidity: (a, b) => (finite(b.liquidity) ?? -Infinity) - (finite(a.liquidity) ?? -Infinity),
     probability: (a, b) => (finite(b.probability) ?? -Infinity) - (finite(a.probability) ?? -Infinity),
@@ -518,8 +521,8 @@ function render() {
     ? "Datos no disponibles"
     : `${visible.length} de ${state.markets.length} mercados`;
   const sourceEmpty = state.dataState === "empty" && state.markets.length === 0;
-  elements.emptyTitle.textContent = sourceEmpty ? "Gamma no devolvió mercados abiertos" : "Ese mercado no está en el radar";
-  elements.emptyCopy.textContent = sourceEmpty ? "La fuente respondió correctamente, pero la muestra está vacía. Vuelve a intentarlo más tarde." : "Prueba otra pregunta o vuelve a ver la muestra completa.";
+  elements.emptyTitle.textContent = sourceEmpty ? "Gamma no devolvió mercados abiertos en esta consulta" : "Ese mercado no está en el radar";
+  elements.emptyCopy.textContent = sourceEmpty ? "La fuente respondió correctamente, pero la muestra está vacía. Vuelve a intentarlo más tarde." : "Prueba otra búsqueda o restablece los filtros para ver la muestra completa.";
   elements.reset.hidden = sourceEmpty;
 }
 
@@ -548,7 +551,7 @@ async function loadMarkets({ reset = false, refresh = false } = {}) {
   if (state.loading) return;
   state.loading = true;
   elements.loadMore.setAttribute("aria-busy", "true");
-  elements.loadMore.textContent = "Cargando...";
+  elements.loadMore.textContent = "Cargando mercados…";
   if (reset) {
     state.markets = [];
     state.nextOffset = 0;
@@ -581,7 +584,7 @@ async function loadMarkets({ reset = false, refresh = false } = {}) {
     const dataTime = safeDate(payload.dataAsOf);
     setDataStatus("live", dataTime
       ? `Gamma · ${dataTime.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`
-      : "Gamma en directo");
+      : "Datos de Gamma");
     state.dataState = payload.dataStatus === "empty" ? "empty" : "live";
     elements.notice.hidden = true;
   } catch (error) {
@@ -614,9 +617,9 @@ elements.minLiquidity.addEventListener("change", event => { state.minLiquidity =
 elements.opportunities.addEventListener("change", event => { state.opportunities = event.target.checked; render(); });
 elements.sort.addEventListener("change", event => { state.sort = event.target.value; render(); });
 elements.reset.addEventListener("click", () => {
-  state.search = ""; state.category = "all"; state.closing = "all"; state.minLiquidity = 0; state.opportunities = false; state.sort = "volume";
+  state.search = ""; state.category = "all"; state.closing = "all"; state.minLiquidity = 0; state.opportunities = false; state.sort = "activity";
   elements.search.value = ""; elements.category.value = "all"; elements.closing.value = "all";
-  elements.minLiquidity.value = "0"; elements.opportunities.checked = false; elements.sort.value = "volume"; render();
+  elements.minLiquidity.value = "0"; elements.opportunities.checked = false; elements.sort.value = "activity"; render();
   elements.search.focus();
 });
 elements.loadMore.addEventListener("click", () => loadMarkets());

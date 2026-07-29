@@ -1,36 +1,39 @@
 <!doctype html>
 <!--
-  THESIS: PELE pasa de fotografiar cuotas a revelar dirección, concentración y fiabilidad; evita el dashboard de métricas aisladas.
-  OWN-WORLD: Sala de señales azul, paneles rectos, rieles medibles y ámbar reservado a decisiones o anomalías.
-  STORY: El usuario detecta qué cambió, identifica la señal dominante, contrasta la lectura y activa vigilancia.
-  FIRST VIEWPORT: La tesis editorial se comprime para que el radar operativo comience dentro del primer viewport.
-  FORM: Extensión Operate del sistema existente, organizada como radar y expedientes desplegables en lugar de una nueva identidad.
+  THESIS: PELE convierte contratos dispersos en un registro de intensidad; rechaza el terminal financiero oscuro y la cuadrícula de tarjetas.
+  OWN-WORLD: Papel técnico azul pálido, tinta berenjena, retícula mineral y marcas naranja reservadas para anomalías y acciones.
+  STORY: El analista reconoce qué señal vibra, compara su lectura, verifica la procedencia y decide dónde profundizar.
+  FIRST VIEWPORT: Una tesis compacta comparte plano con una traza continua y el balance Sí/No; la pila operativa comienza inmediatamente después.
+  FORM: Sismógrafo de mercado, cuarta dirección grounded; bandas horizontales sobre mesa de registro, seed cf310662.
 -->
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Panel público de inteligencia de mercados activos de Polymarket.">
-  <meta name="theme-color" content="#1746d1">
-  <title>PELE // Market Intelligence</title>
+  <meta name="description" content="Explora mercados abiertos de Polymarket y compara precio, liquidez, actividad, spread y solidez de cada señal con procedencia visible.">
+  <meta property="og:title" content="PELE | Radar de señales de Polymarket">
+  <meta property="og:description" content="Detecta qué mercados merecen atención, compara sus señales y verifica de dónde sale cada lectura.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#321844">
+  <title>PELE | Radar de señales de Polymarket</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Instrument+Sans:wdth,wght@75..100,400..700&family=League+Gothic&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/styles.css?v=3">
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Atkinson+Hyperlegible:wght@400;700&family=Azeret+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/styles.css?v=5">
   <script src="/assets/market-math.js?v=3" defer></script>
-  <script src="/assets/app.js?v=3" defer></script>
+  <script src="/assets/app.js?v=4" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#markets">Saltar a mercados</a>
   <header class="topbar">
     <a class="brand" href="/" aria-label="PELE inicio">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>PELE <small>Predictive market radar</small></span>
+      <span>PELE <small>Registro de señales</small></span>
     </a>
       <div class="topbar-meta">
-        <span class="edition">Gamma / mercados abiertos</span>
-        <a class="radar-shortcut" href="#markets">Abrir radar <span aria-hidden="true">↓</span></a>
+         <span class="edition">Gamma / mercados abiertos</span>
+         <a class="radar-shortcut" href="#markets">Ir al radar <span aria-hidden="true">↓</span></a>
         <a class="alert-counter" href="#alerts" aria-label="Ir al centro de alertas"><span id="alert-count">0</span> alertas</a>
         <div class="live-indicator" id="data-status" data-state="loading" role="status">
         <span aria-hidden="true"></span><span id="data-status-label">Conectando</span>
@@ -41,15 +44,19 @@
   <main>
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
-        <p class="eyebrow">Mesa pública de contratos binarios</p>
-        <h1 id="page-title">No predice<br>el futuro.<br><span>Mide cuánto</span><br><em>cuesta creerlo.</em></h1>
+         <p class="eyebrow">Estación pública / señales de Polymarket</p>
+         <h1 id="page-title">El mercado<br>no habla.<br><span>Deja trazas.</span></h1>
         <div class="hero-bottom">
-          <p class="intro">PELE cruza precio, liquidez y actividad para distinguir una cuota popular de una señal que merece atención.</p>
-          <a class="hero-link" href="#markets">Encontrar una señal <span aria-hidden="true">↓</span></a>
-        </div>
-      </div>
+           <p class="intro">PELE convierte precio, liquidez y actividad en señales explicables para identificar qué mercados merecen atención, comparar lecturas y verificar su procedencia.</p>
+           <a class="hero-link" href="#markets">Explorar señales activas <span aria-hidden="true">↓</span></a>
+         </div>
+       </div>
+       <svg class="signal-trace" viewBox="0 0 1200 180" preserveAspectRatio="none" aria-hidden="true">
+         <path class="trace-ghost" d="M0 92H1200"></path>
+         <path class="trace-live" pathLength="1" d="M0 92 L70 92 L84 78 L99 106 L113 92 L240 92 L252 88 L264 96 L276 92 L410 92 L426 48 L442 135 L458 65 L474 116 L490 92 L650 92 L662 84 L674 100 L686 92 L810 92 L825 22 L840 155 L856 50 L872 126 L888 92 L1010 92 L1025 70 L1040 110 L1055 92 L1200 92"></path>
+       </svg>
       <div class="verdict" id="verdict" style="--yes: 50%" aria-label="Media simple de la muestra observada">
-        <div class="verdict-caption"><span>Media simple de la muestra</span><span>Sin ponderar / contratos cargados</span></div>
+         <div class="verdict-caption"><span>Balance de la muestra</span><span>Media simple / sin ponderar</span></div>
         <div class="verdict-contract">
           <div class="verdict-yes"><span>SÍ</span><strong id="verdict-yes">50%</strong></div>
           <div class="verdict-no"><span>NO</span><strong id="verdict-no">50%</strong></div>
@@ -62,8 +69,8 @@
     <section class="workspace" id="markets" aria-labelledby="markets-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Sistema de vigilancia</p>
-          <h2 id="markets-title">Contratos en observación</h2>
+           <p class="eyebrow">Registro activo</p>
+           <h2 id="markets-title">Radar de señales activas</h2>
         </div>
         <p id="result-count" aria-live="polite">Consultando Gamma...</p>
       </div>
@@ -74,9 +81,9 @@
 
       <form class="controls" id="filters" role="search" data-mobile-collapsed="true">
         <label class="search-field">
-          <span class="control-label">Buscar una pregunta</span>
+          <span class="control-label">Buscar mercados</span>
           <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-          <input id="search" type="search" placeholder="Bitcoin, elecciones, tipos..." autocomplete="off">
+          <input id="search" type="search" placeholder="Ej.: Bitcoin, elecciones o tipos de interés" autocomplete="off">
         </label>
         <label><span class="control-label">Categoría</span><select id="category"><option value="all">Todas las categorías</option></select></label>
         <label><span class="control-label">Cierre</span><select id="closing">
@@ -92,13 +99,14 @@
           <option value="1000000">1 millón $</option>
         </select></label>
         <label><span class="control-label">Ordenar por</span><select id="sort">
+          <option value="activity">Mayor intensidad</option>
           <option value="volume">Mayor volumen</option>
           <option value="liquidity">Mayor liquidez</option>
-          <option value="probability">Mayor probabilidad</option>
-          <option value="confidence">Mejor señal</option>
+          <option value="probability">Mayor probabilidad de Sí</option>
+          <option value="confidence">Mayor solidez</option>
           <option value="date">Fecha más próxima</option>
         </select></label>
-        <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Actividad inusual</b><small>Presión observada ≥ 70/100</small></span></label>
+        <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Actividad alta</b><small>Índice de actividad ≥ 70/100</small></span></label>
       </form>
 
       <section class="comparison-panel" id="comparison-panel" hidden aria-labelledby="comparison-title">
@@ -114,7 +122,7 @@
         <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       </div>
       <div id="empty" class="empty" hidden>
-        <strong id="empty-title">Ese mercado no está en el radar</strong><p id="empty-copy">Prueba otra pregunta o vuelve a ver la muestra completa.</p>
+        <strong id="empty-title">Ese mercado no está en el radar</strong><p id="empty-copy">Prueba otra búsqueda o restablece los filtros para ver la muestra completa.</p>
         <button id="reset" type="button">Restablecer filtros</button>
       </div>
       <div id="market-grid" class="market-grid" hidden></div>
@@ -126,22 +134,22 @@
     <section class="kpis" aria-label="Resumen de mercados">
       <article><span>En radar</span><strong id="kpi-count">--</strong><small>mercados abiertos</small></article>
       <article><span>Volumen observado</span><strong id="kpi-volume">--</strong><small>acumulado</small></article>
-      <article><span>Capital disponible</span><strong id="kpi-liquidity">--</strong><small>liquidez actual</small></article>
+      <article><span>Liquidez observada</span><strong id="kpi-liquidity">--</strong><small>total de la muestra cargada</small></article>
       <article><span>Media simple</span><strong id="kpi-probability">--</strong><small>muestra cargada, sin ponderar</small></article>
     </section>
 
     <section class="secondary-tools" aria-labelledby="secondary-tools-title">
       <header class="secondary-tools-heading">
         <div>
-          <p class="signal-kicker">Contexto bajo demanda</p>
-          <h2 id="secondary-tools-title">Método y herramientas</h2>
+           <p class="signal-kicker">Verificación y vigilancia</p>
+           <h2 id="secondary-tools-title">Verificar la lectura</h2>
         </div>
         <p>Abre sólo la capa que necesites para verificar la señal, gestionar vigilancia o ejecutar una simulación independiente.</p>
       </header>
 
       <div class="secondary-layer-list">
         <details class="secondary-layer">
-          <summary><span><small>Metodología</small><strong>Cómo se construye la señal</strong></span><em>Procedencia, cobertura y solidez</em></summary>
+          <summary><span><small>Metodología</small><strong>Cómo se calcula y documenta cada señal</strong></span><em>Procedencia, cobertura y solidez</em></summary>
           <div class="secondary-layer-content methodology-content">
             <article class="hit-rate">
               <div class="panel-label"><span>Cobertura de mercado</span><small>Muestra viva recuperada de Gamma</small></div>
@@ -162,11 +170,11 @@
         </details>
 
         <details class="secondary-layer" id="alert-layer">
-          <summary><span><small>Vigilancia</small><strong>Alertas de mercado</strong></span><em id="alert-layer-count">0 mercados vigilados</em></summary>
+          <summary><span><small>Vigilancia</small><strong>Seguimiento de mercados</strong></span><em id="alert-layer-count">0 mercados vigilados</em></summary>
           <aside class="alert-desk" id="alerts" aria-labelledby="alerts-title">
-            <div class="panel-label"><span id="alerts-title">Vigilancia inteligente</span><small>Historial persistente en este navegador</small></div>
+            <div class="panel-label"><span id="alerts-title">Registro de vigilancia</span><small>Historial local en este navegador</small></div>
             <strong id="alert-desk-count">Sin mercados vigilados</strong>
-            <p>Activa una alerta desde cualquier expediente. PELE conserva su última lectura y registra cambios de precio, picos de actividad y spreads amplios al volver.</p>
+            <p>Vigila un mercado desde su expediente. Si el almacenamiento local está disponible, PELE comparará la última lectura guardada cuando vuelvas.</p>
             <div class="alert-events" id="alert-events" aria-live="polite"><span>Sin eventos evaluados.</span></div>
             <div class="alert-rules" aria-label="Reglas de alerta disponibles">
               <span>Cambio de precio</span><span>Presión de actividad</span><span>Spread observable</span>
@@ -204,6 +212,6 @@
     </section>
   </main>
 
-  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Lectura informativa, no asesoramiento financiero</span><span>Datos públicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a></span></footer>
+  <footer><span>PELE / Predictive Event Liquidity Engine</span><span>Lectura informativa, no asesoramiento financiero</span><span>Mercados públicos de <a href="https://polymarket.com" target="_blank" rel="noopener noreferrer">Polymarket</a> vía Gamma</span></footer>
 </body>
 </html>
