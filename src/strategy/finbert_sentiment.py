@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cachetools import TTLCache
 
+from src.config.optimization_settings import LOCAL_OPTIMIZATION_CONFIG
 from src.strategy.finbert_config import FINBERT_CONFIG, MODEL_LABEL_MAP
 from src.strategy.finbert_utils import (
     compute_compound_score,
@@ -87,6 +88,8 @@ class FinBERTSentimentAnalyzer:
         cache_size: int = FINBERT_CONFIG["sentiment_cache_size"],
         cache_ttl: int = FINBERT_CONFIG["sentiment_cache_ttl_seconds"],
         confidence_threshold: Decimal = FINBERT_CONFIG["confidence_threshold"],
+        enabled_for_markets: list[str] | None = None,
+        update_interval_seconds: int = 300,
     ) -> None:
         self.model_name = model_name
         self.use_onnx = use_onnx
@@ -95,6 +98,9 @@ class FinBERTSentimentAnalyzer:
         self.max_length = max_length
         self.batch_size = batch_size
         self.confidence_threshold = confidence_threshold
+        self.enabled_for_markets = enabled_for_markets or ["long_term"]
+        self._update_interval_s = update_interval_seconds
+        self._last_update_time: dict[str, float] = {}  # market_id -> last update time
 
         self._model = None
         self._tokenizer = None
@@ -161,41 +167,97 @@ class FinBERTSentimentAnalyzer:
         self._tokenizer = await asyncio.to_thread(
             AutoTokenizer.from_pretrained, self.model_name
         )
+
         try:
+            import onnxruntime as ort
             from optimum.onnxruntime import ORTModelForSequenceClassification
 
-            self._model = await asyncio.to_thread(
-                ORTModelForSequenceClassification.from_pretrained,
-                self.model_name,
-                export=False,
-                provider="CPUExecutionProvider",
+            # Configure ONNX Runtime session options for maximum CPU performance
+            session_options = ort.SessionOptions()
+            session_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             )
-        except Exception:
-            logger.info("ONNX export not cached, exporting model to ONNX...")
-            from optimum.onnxruntime import ORTModelForSequenceClassification
+            mc_cfg = LOCAL_OPTIMIZATION_CONFIG.get("finbert", {})
+            session_options.intra_op_num_threads = mc_cfg.get("intra_op_threads", 2)
+            session_options.inter_op_num_threads = mc_cfg.get("inter_op_threads", 1)
+            session_options.enable_mem_pattern = True
+            session_options.enable_cpu_mem_arena = True
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
-            self._model = await asyncio.to_thread(
-                ORTModelForSequenceClassification.from_pretrained,
-                self.model_name,
-                export=True,
-                provider="CPUExecutionProvider",
+            logger.info(
+                "ONNX session: intra_op_threads=%d inter_op_threads=%d "
+                "graph_opt=%s mem_pattern=%s cpu_arena=%s",
+                session_options.intra_op_num_threads,
+                session_options.inter_op_num_threads,
+                session_options.graph_optimization_level,
+                session_options.enable_mem_pattern,
+                session_options.enable_cpu_mem_arena,
             )
 
-        if self.use_quantization:
             try:
-                from optimum.onnxruntime import ORTQuantizer
-                from optimum.onnxruntime.configuration import AutoQuantizationConfig
-
-                quantizer = ORTQuantizer.from_pretrained(self._model)
-                qconfig = AutoQuantizationConfig.avx512_vnni(
-                    is_static=False, per_channel=True
-                )
                 self._model = await asyncio.to_thread(
-                    quantizer.quantize, quantization_config=qconfig
+                    ORTModelForSequenceClassification.from_pretrained,
+                    self.model_name,
+                    export=False,
+                    provider="CPUExecutionProvider",
+                    session_options=session_options,
                 )
-                logger.info("INT8 quantization applied to ONNX model")
             except Exception:
-                logger.warning("INT8 quantization failed, using FP32 ONNX")
+                logger.info("ONNX export not cached, exporting model to ONNX...")
+                self._model = await asyncio.to_thread(
+                    ORTModelForSequenceClassification.from_pretrained,
+                    self.model_name,
+                    export=True,
+                    provider="CPUExecutionProvider",
+                    session_options=session_options,
+                )
+
+            if self.use_quantization:
+                try:
+                    from optimum.onnxruntime import ORTQuantizer
+                    from optimum.onnxruntime.configuration import AutoQuantizationConfig
+
+                    quantizer = ORTQuantizer.from_pretrained(self._model)
+                    qconfig = AutoQuantizationConfig.avx512_vnni(
+                        is_static=False, per_channel=True
+                    )
+                    self._model = await asyncio.to_thread(
+                        quantizer.quantize, quantization_config=qconfig
+                    )
+                    logger.info("INT8 quantization applied to ONNX model")
+                except Exception:
+                    logger.warning("INT8 quantization failed, using FP32 ONNX")
+
+        except Exception:
+            logger.warning("ONNX Runtime load failed — falling back to PyTorch")
+            raise
+
+        # Warm-up: first inference is always slower due to JIT compilation
+        await self._onnx_warmup()
+
+    async def _onnx_warmup(self) -> None:
+        """Execute warm-up inference to avoid cold-start latency.
+
+        The first ONNX Runtime inference call is significantly slower
+        due to graph optimization, memory allocation, and thread pool
+        initialization. Running a dummy inference at load time ensures
+        that subsequent real inferences see consistent low latency.
+        """
+        logger.info("ONNX warm-up: running dummy inference...")
+        try:
+            dummy = "The market condition is neutral with moderate volume."
+            start = time.perf_counter()
+            await asyncio.to_thread(self._inference_onnx_single, dummy)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info("ONNX warm-up complete: %.1fms (first inference)", elapsed_ms)
+
+            # Second warm-up to stabilize thread pool
+            start = time.perf_counter()
+            await asyncio.to_thread(self._inference_onnx_single, dummy)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info("ONNX warm-up second call: %.1fms (steady state)", elapsed_ms)
+        except Exception as exc:
+            logger.warning("ONNX warm-up failed: %s (non-fatal)", exc)
 
     async def analyze(self, text: str) -> SentimentResult:
         cache_key = hashlib_md5(text)
@@ -526,6 +588,37 @@ class FinBERTSentimentAnalyzer:
     ) -> Decimal:
         return sentiment.implied_probability
 
+    def is_enabled_for_market(self, market_type: str) -> bool:
+        """Check if FinBERT is enabled for this market type.
+
+        Short-duration markets (5min, 15min) have FinBERT DISABLED
+        because its 65-180ms latency is incompatible with <100ms execution.
+        Only long-term markets use FinBERT.
+
+        Parameters
+        ----------
+        market_type : str
+            Market type: "crypto_5min", "crypto_15min", or "long_term".
+
+        Returns
+        -------
+        bool
+            True if FinBERT should process this market.
+        """
+        return market_type in self.enabled_for_markets
+
+    def should_update(self, market_id: str) -> bool:
+        """Check if enough time has passed since last update.
+
+        FinBERT updates are throttled to once every `update_interval_seconds`
+        (default 300s = 5 minutes) for long-term markets.
+        """
+        last = self._last_update_time.get(market_id, 0.0)
+        return (time.time() - last) >= self._update_interval_s
+
+    def _mark_updated(self, market_id: str) -> None:
+        self._last_update_time[market_id] = time.time()
+
     def map_to_trading_signal(
         self, sentiment: SentimentResult, current_market_price: Decimal
     ) -> Tuple[str, Decimal]:
@@ -545,12 +638,32 @@ class FinBERTSentimentAnalyzer:
         market: Dict[str, Any],
         current_price: Decimal,
         news_texts: List[str],
+        market_type: str = "long_term",
+        market_id: str = "",
     ) -> Optional[Dict[str, Any]]:
+        """Compute sentiment signal with market-type gating.
+
+        For short-duration markets (5min, 15min), FinBERT is entirely skipped
+        to avoid the 65-180ms inference latency.
+
+        For long-term markets, throttled to once per `update_interval_seconds`.
+        """
+        if not self.is_enabled_for_market(market_type):
+            logger.debug("FinBERT disabled for market type %s", market_type)
+            return None
+
+        if market_id and not self.should_update(market_id):
+            logger.debug("FinBERT throttled for %s — update interval not elapsed", market_id)
+            return None
+
         if not news_texts:
             logger.debug("No news texts provided for market %s", market.get("id"))
             return None
 
         results = await self.analyze_batch(news_texts)
+
+        if market_id:
+            self._mark_updated(market_id)
 
         high_confidence = [
             r for r in results if r.confidence >= self.confidence_threshold

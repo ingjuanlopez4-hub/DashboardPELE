@@ -66,6 +66,9 @@ class BacktestResults:
     drawdown_curve: list[Decimal] = field(default_factory=list)
     daily_returns: list[float] = field(default_factory=list)
     timestamps: list[str] = field(default_factory=list)
+    trade_pnls: list[Decimal] = field(default_factory=list)
+    historical_points: int = 0
+    data_source: str = "synthetic"
     params_used: dict[str, Any] = field(default_factory=dict)
 
     def summary_dict(self) -> dict[str, Any]:
@@ -85,6 +88,8 @@ class BacktestResults:
             "total_trades": self.total_trades,
             "winning_trades": self.winning_trades,
             "losing_trades": self.losing_trades,
+            "historical_points": self.historical_points,
+            "data_source": self.data_source,
         }
 
 
@@ -129,8 +134,8 @@ class StrategyBacktestRunner:
     ) -> BacktestResults:
         """Run backtest over the given markets.
 
-        For simulation purposes, this generates synthetic price histories
-        based on current order book data and runs the strategy iteratively.
+        Replays persisted token prices chronologically. Markets without enough
+        history retain a clearly identified synthetic fallback.
 
         Parameters
         ----------
@@ -164,14 +169,19 @@ class StrategyBacktestRunner:
         timestamps: list[str] = [datetime.now(timezone.utc).isoformat()]
 
         for tm in markets:
-            result = await self._run_single_market(tm, current_balance)
+            result = await self._run_single_market(
+                tm, current_balance, start_date=start_date, end_date=end_date
+            )
             all_trades.extend(result.trades)
+            aggregated.trade_pnls.extend(result.trade_pnls)
+            aggregated.historical_points += result.historical_points
+            if result.data_source == "historical":
+                aggregated.data_source = "historical"
 
-            for t in result.trades:
-                pnl = t.usdc_amount if "BUY" in t.side else -t.usdc_amount
+            for pnl, timestamp in zip(result.trade_pnls, result.timestamps[1:]):
                 current_balance += pnl
                 equity_curve.append(current_balance)
-                timestamps.append(t.timestamp)
+                timestamps.append(timestamp)
 
             if result.trades:
                 aggregated.winning_trades += result.winning_trades
@@ -186,12 +196,12 @@ class StrategyBacktestRunner:
         aggregated.timestamps = timestamps
 
         if len(all_trades) > 0:
-            wins = sum(1 for t in all_trades if t.side.startswith("BUY"))
-            losses = sum(1 for t in all_trades if t.side.startswith("SELL"))
+            wins = sum(1 for pnl in aggregated.trade_pnls if pnl > 0)
+            losses = sum(1 for pnl in aggregated.trade_pnls if pnl <= 0)
             aggregated.win_rate = wins / len(all_trades) if len(all_trades) > 0 else 0.0
 
-            gross_profit = sum(t.usdc_amount for t in all_trades if t.side.startswith("BUY") and t.success)
-            gross_loss = sum(t.usdc_amount for t in all_trades if t.side.startswith("SELL") and t.success)
+            gross_profit = sum(pnl for pnl in aggregated.trade_pnls if pnl > 0)
+            gross_loss = -sum(pnl for pnl in aggregated.trade_pnls if pnl < 0)
             aggregated.profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else float("inf")
 
             returns = []
@@ -320,9 +330,13 @@ class StrategyBacktestRunner:
                      cached_count, len(markets))
 
     async def _run_single_market(
-        self, tm: TrackedMarket, balance: Decimal
+        self,
+        tm: TrackedMarket,
+        balance: Decimal,
+        start_date: str = "",
+        end_date: str = "",
     ) -> BacktestResults:
-        """Run backtest on a single market, generating synthetic price steps."""
+        """Replay one market without using future prices to create signals."""
         result = BacktestResults(
             market_id=tm.market.id,
             market_question=tm.market.question,
@@ -338,19 +352,57 @@ class StrategyBacktestRunner:
                 return result
             logger.info("Using fallback snapshot for market %s (mid=%s)", tm.market.question[:40], snap.mid_price)
 
-        mid = snap.mid_price
-        tick = tm.market.tick_size
-        spread = snap.spread_pct
+        token_id = self._history_token_id(tm, snap)
+        history = await self._db.get_token_price_history(
+            token_id,
+            limit=10_000,
+            start_date=start_date,
+            end_date=end_date,
+        ) if token_id else []
 
-        n_steps = self._rng.randint(20, 100)
-        price = mid
+        if len(history) >= 2:
+            price_points = [
+                (
+                    Decimal(str(row["mid_price"])),
+                    str(row["snapshot_time"]),
+                    row,
+                )
+                for row in history
+            ]
+            result.data_source = "historical"
+            result.historical_points = len(price_points)
+        else:
+            n_steps = self._rng.randint(20, 100)
+            price = snap.mid_price
+            price_points = [
+                (price, datetime.now(timezone.utc).isoformat(), None)
+            ]
+            for _ in range(n_steps):
+                price = self._simulate_price_step(
+                    price, tm.market.tick_size, snap.spread_pct, tm
+                )
+                price_points.append(
+                    (price, datetime.now(timezone.utc).isoformat(), None)
+                )
+
+        mid = price_points[0][0]
+        tick = tm.market.tick_size
         balance_step = balance
         equity_curve = [balance_step]
-        timestamps = [datetime.now(timezone.utc).isoformat()]
+        timestamps = [price_points[0][1]]
+        rolling_history: list[Decimal] = [mid]
 
-        for step in range(n_steps):
-            price = self._simulate_price_step(price, tick, spread, tm)
-            signal = self._generate_signal(price, mid, tm)
+        for (price, timestamp, row), (next_price, _, _) in zip(
+            price_points[:-1], price_points[1:]
+        ):
+            signal = self._generate_signal(
+                price,
+                mid,
+                tm,
+                price_history=list(rolling_history),
+                snapshot=self._snapshot_from_history_row(row) if row else None,
+                include_sentiment=result.data_source != "historical",
+            )
 
             if signal is not None:
                 threshold = self._params["min_edge"]
@@ -358,18 +410,20 @@ class StrategyBacktestRunner:
                 if abs(ev) >= threshold:
                     trade = self._execute_trade(tm, signal, balance_step, price, tick)
                     if trade is not None:
-                        await self._db.insert_trade(trade)
+                        trade.timestamp = timestamp
                         result.trades.append(trade)
+                        pnl = self._trade_pnl(trade, price, next_price)
+                        result.trade_pnls.append(pnl)
+                        balance_step += pnl
 
-                        if trade.side.startswith("BUY"):
+                        if pnl > 0:
                             result.winning_trades += 1
-                            balance_step += trade.usdc_amount
                         else:
                             result.losing_trades += 1
-                            balance_step -= trade.usdc_amount
 
                         equity_curve.append(balance_step)
                         timestamps.append(trade.timestamp)
+            rolling_history.append(price)
 
         result.total_trades = len(result.trades)
         result.final_balance = balance_step
@@ -380,13 +434,50 @@ class StrategyBacktestRunner:
 
         if result.total_trades > 0:
             result.win_rate = result.winning_trades / result.total_trades
-            wins = [t for t in result.trades if t.side.startswith("BUY")]
-            losses = [t for t in result.trades if t.side.startswith("SELL")]
-            gross_profit = sum(t.usdc_amount for t in wins)
-            gross_loss = sum(t.usdc_amount for t in losses)
+            gross_profit = sum(pnl for pnl in result.trade_pnls if pnl > 0)
+            gross_loss = -sum(pnl for pnl in result.trade_pnls if pnl < 0)
             result.profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else float("inf")
 
         return result
+
+    @staticmethod
+    def _history_token_id(tm: TrackedMarket, snap: OrderBookSnapshot) -> str:
+        for token in tm.tokens:
+            if token.outcome.upper() == "YES" and token.token_id:
+                return token.token_id
+        return snap.token_id or (tm.tokens[0].token_id if tm.tokens else "")
+
+    @staticmethod
+    def _snapshot_from_history_row(row: dict[str, Any]) -> OrderBookSnapshot:
+        def decimal_value(key: str) -> Decimal:
+            return Decimal(str(row.get(key) or "0"))
+
+        return OrderBookSnapshot(
+            market_id=str(row["market_id"]),
+            token_id=str(row["token_id"]),
+            best_bid=decimal_value("best_bid"),
+            best_ask=decimal_value("best_ask"),
+            mid_price=decimal_value("mid_price"),
+            spread_pct=decimal_value("spread_pct"),
+            depth_2pct=decimal_value("depth_2pct"),
+            bid_depth_5=decimal_value("bid_depth_5"),
+            ask_depth_5=decimal_value("ask_depth_5"),
+        )
+
+    def _trade_pnl(
+        self, trade: TradeRecord, price: Decimal, next_price: Decimal
+    ) -> Decimal:
+        entry = Decimal("1") - price if trade.side == "BUY_NO" else price
+        exit_price = (
+            Decimal("1") - next_price
+            if trade.side == "BUY_NO"
+            else next_price
+        )
+        if entry <= 0:
+            return Decimal("0")
+        gross = trade.usdc_amount * ((exit_price / entry) - Decimal("1"))
+        fee = trade.usdc_amount * self._params["base_fee_pct"] / Decimal("100")
+        return (gross - fee).quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
 
     def _make_fallback_snapshot(self, tm: TrackedMarket) -> Optional[OrderBookSnapshot]:
         yes_price = None
@@ -438,7 +529,13 @@ class StrategyBacktestRunner:
         return max(tick, min(Decimal("1"), new_price))
 
     def _generate_signal(
-        self, current_price: Decimal, mid_price: Decimal, tm: TrackedMarket
+        self,
+        current_price: Decimal,
+        mid_price: Decimal,
+        tm: TrackedMarket,
+        price_history: Optional[list[Decimal]] = None,
+        snapshot: Optional[OrderBookSnapshot] = None,
+        include_sentiment: bool = True,
     ) -> Optional[dict[str, Any]]:
         """Generate a trading signal using the three strategy components.
 
@@ -447,11 +544,18 @@ class StrategyBacktestRunner:
         its effective weight drops so it does not bias the decision.
         Returns None if no signal, or a dict with signal details.
         """
-        snap = next(iter(tm.snapshots.values())) if tm.snapshots else None
+        snap = snapshot or (next(iter(tm.snapshots.values())) if tm.snapshots else None)
 
         wick_signal = self._wick_fishing_signal(snap, current_price)
-        sentiment_signal = self._sentiment_signal(tm)
-        mc_signal = self._monte_carlo_signal(current_price, mid_price, tm)
+        sentiment_signal = self._sentiment_signal(tm) if include_sentiment else {
+            "ev": Decimal("0"),
+            "probability": Decimal("0.5"),
+            "signal": "neutral",
+            "confidence": Decimal("0"),
+        }
+        mc_signal = self._monte_carlo_signal(
+            current_price, mid_price, tm, price_history=price_history
+        )
 
         w_wick = self._params["w_wick"]
         w_sent = self._params["w_sentiment"]
@@ -571,7 +675,11 @@ class StrategyBacktestRunner:
         }
 
     def _monte_carlo_signal(
-        self, current_price: Decimal, initial_mid_price: Decimal, tm: TrackedMarket
+        self,
+        current_price: Decimal,
+        initial_mid_price: Decimal,
+        tm: TrackedMarket,
+        price_history: Optional[list[Decimal]] = None,
     ) -> dict[str, Any]:
         """Estimate EV by comparing current price to initial fair value.
 
@@ -580,23 +688,27 @@ class StrategyBacktestRunner:
         Monte Carlo simulations estimate the probability of reversion.
         """
         n_simulations = 10000
-        sigma = 0.05
+        if price_history and len(price_history) >= 10:
+            prices = np.asarray([float(p) for p in price_history if p > 0])
+            returns = np.diff(np.log(prices))
+            sigma = float(np.std(returns)) if len(returns) >= 5 else 0.05
+            sigma = min(max(sigma, 0.001), 0.50)
+        else:
+            sigma = 0.05
         n_steps = 10
         dt = 1.0 / n_steps
 
         mid = float(current_price)
         fair = float(initial_mid_price)
 
-        final_prices = []
-        for _ in range(n_simulations):
-            p = mid
-            for _ in range(n_steps):
-                ret = self._rng.gauss(0, sigma * math.sqrt(dt))
-                p *= (1 + ret)
-            final_prices.append(p)
+        rng = np.random.default_rng(self._rng.randrange(2**32))
+        shocks = rng.standard_normal((n_simulations, n_steps))
+        log_returns = (-0.5 * sigma * sigma * dt) + sigma * math.sqrt(dt) * shocks
+        final_prices = mid * np.exp(np.sum(log_returns, axis=1))
+        final_prices = np.clip(final_prices, 0.001, 0.999)
 
-        prob_up = sum(1 for p in final_prices if p > mid) / n_simulations
-        expected_price = sum(final_prices) / n_simulations
+        prob_up = float(np.mean(final_prices > mid))
+        expected_price = float(np.mean(final_prices))
         mc_ev = (fair - expected_price) / fair if fair > 0 else 0
 
         mc_probability = Decimal(str(round(prob_up, 4)))
@@ -608,6 +720,8 @@ class StrategyBacktestRunner:
             "signal": "up" if mc_ev_dec > 0 else "down",
             "n_simulations": n_simulations,
             "expected_price": round(expected_price, 4),
+            "history_points": len(price_history or []),
+            "sigma": round(sigma, 6),
         }
 
     def _execute_trade(

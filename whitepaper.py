@@ -1138,10 +1138,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </table>
         <h3>Limitaciones del Backtest</h3>
         <ul>
-            <li><strong>Slippage:</strong> Se asume un slippage fijo de 1 tick. En condiciones de baja liquidez el slippage real puede ser mayor.</li>
-            <li><strong>Latencia:</strong> No se modela latencia de red ni retrasos en la firma de transacciones EIP-712.</li>
-            <li><strong>Liquidez:</strong> Polymarket puede tener profundidad limitada en ciertos mercados, afectando la ejecución de órdenes grandes.</li>
-            <li><strong>Precisión Decimal:</strong> Todas las métricas se calculan con Decimal para cumplir con el tick size del CLOB.</li>
+            <li><strong>Slippage:</strong> Simulated trades assume mid-price execution; real slippage may reduce returns.</li>
+            <li><strong>Sentiment:</strong> FinBERT simulation uses category baselines; real news sentiment requires live NLP pipeline.</li>
+            <li><strong>Regime Change:</strong> Market microstructure may shift; periodic recalibration of weights is essential.</li>
         </ul>
     </div>
 
@@ -1156,6 +1155,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             {% for improvement in improvements %}
             <li>{{ improvement }}</li>
             {% endfor %}
+        </ul>
+    </div>
+
+    <!-- 8. PRÓXIMOS PASOS -->
+    <div class="section">
+        <h2>8. Próximos Pasos</h2>
+        <ul>
+            <li>Deploy with dry-run mode</li>
+            <li>Implement live FinBERT</li>
+            <li>Add on-chain data signals</li>
+            <li>Extend to multi-asset optimization</li>
         </ul>
     </div>
 

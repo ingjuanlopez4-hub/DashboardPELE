@@ -80,7 +80,7 @@ RISK: dict[str, Any] = {
     "min_hours_to_resolution": 336,                 # Min 14 days to market resolution
 
     # Dynamic edge calibration
-    "base_min_edge": Decimal("0.05"),               # Base min edge (adjusted by MAE)
+    "base_min_edge": Decimal("0.02"),               # Base min edge (reduced from 0.05)
     "mae_adjustment_factor": Decimal("1.5"),        # MAE multiplier for edge adjustment
     "max_min_edge": Decimal("0.15"),                # Cap on adjusted min edge
 
@@ -95,6 +95,121 @@ RISK: dict[str, Any] = {
     # Cron monitor
     "monitor_interval_seconds": 60,                 # Health check frequency
     "balance_discrepancy_threshold_usdc": Decimal("1.0"),  # Alert if balance differs > 1 USDC
+
+    # ── NEW v3 parameters (rentabilidad) ───────────────────────────────
+    # Strategy
+    "min_edge": Decimal("0.02"),                    # Reduced from 0.05 to 0.02
+    "max_position_size_pct": Decimal("3.0"),       # Max 3% per trade (was in RISK already)
+    "min_consensus": 2,                             # At least 2 modules must agree
+    "kelly_fraction": Decimal("0.25"),              # Keep quarter-Kelly
+
+    # External signal
+    "external_signal": {
+        "enabled": True,
+        "binance_streams": ["btcusdt", "ethusdt", "solusdt", "xrpusdt", "dogeusdt"],
+        "min_distance_pct": Decimal("0.15"),
+        "cache_ttl_ms": 100,
+    },
+
+    # Maker-first execution
+    "maker_first": {
+        "enabled": True,
+        "maker_timeout_seconds": 15,
+        "cross_spread_only_if_edge_above": Decimal("0.03"),
+    },
+
+    # Risk reinforced
+    "risk_v3": {
+        "daily_loss_pct": Decimal("5.0"),
+        "monthly_loss_pct": Decimal("15.0"),
+        "total_drawdown_pct": Decimal("25.0"),
+        "per_trade_max_pct": Decimal("3.0"),
+        "min_liquidity_usd": Decimal("5000"),
+        "max_slippage_pct": Decimal("3.0"),
+        "stop_loss_per_position_pct": Decimal("20.0"),
+        "trailing_profit_lock": {"gain_pct": Decimal("15.0"), "retrace_pct": Decimal("10.0")},
+        "correlated_exposure_max_pct": Decimal("25.0"),
+    },
+
+    # FinBERT config
+    "finbert": {
+        "enabled_for_markets": ["long_term"],
+        "batch_size": 16,
+        "cache_ttl_seconds": 600,
+        "update_interval_seconds": 300,
+    },
+
+    # Monte Carlo config
+    "montecarlo": {
+        "enabled_for_markets": ["long_term"],
+        "n_simulations": 1000,
+        "update_interval_minutes": 60,
+        "use_float_internally": True,
+    },
+
+    # ── NEW v4 parameters ──────────────────────────────────────────────
+    # Slippage model
+    "slippage": {
+        "maker_slippage_bps": Decimal("0"),
+        "taker_slippage_bps": Decimal("5"),
+        "depth_tiers": [
+            {"level": 1, "depth_usdc": Decimal("1000"), "slippage_bps": Decimal("1")},
+            {"level": 2, "depth_usdc": Decimal("2500"), "slippage_bps": Decimal("3")},
+            {"level": 3, "depth_usdc": Decimal("5000"), "slippage_bps": Decimal("5")},
+            {"level": 4, "depth_usdc": Decimal("10000"), "slippage_bps": Decimal("10")},
+            {"level": 5, "depth_usdc": Decimal("25000"), "slippage_bps": Decimal("20")},
+        ],
+        "fallback_slippage_bps": Decimal("15"),
+        "max_slippage_bps": Decimal("50"),
+    },
+
+    # Regime detector
+    "regime_detector": {
+        "enabled": True,
+        "vol_window": 50,
+        "liq_window": 50,
+        "trend_window": 20,
+        "vol_threshold_high": Decimal("0.03"),
+        "vol_threshold_chaotic": Decimal("0.06"),
+        "liq_threshold_low": Decimal("2000"),
+        "trend_threshold": Decimal("0.015"),
+        "recalibration_cooldown_seconds": 3600,
+    },
+
+    # On-chain signals
+    "onchain": {
+        "enabled": True,
+        "polygon_rpc": "https://polygon-rpc.com",
+        "whale_threshold_usdc": Decimal("100000"),
+        "gas_spike_threshold_gwei": Decimal("150"),
+        "poll_interval_seconds": 5.0,
+        "min_confidence": Decimal("0.3"),
+    },
+
+    # Live FinBERT pipeline
+    "live_sentiment": {
+        "enabled": True,
+        "update_interval_seconds": 300,
+        "min_articles_for_real_sentiment": 1,
+        "use_keyword_fallback": True,
+        "use_category_baseline": True,
+    },
+
+    # Multi-asset optimization
+    "multi_asset": {
+        "enabled": True,
+        "max_correlation_threshold": 0.70,
+        "correlation_window": 50,
+        "max_positions_per_category": 3,
+        "portfolio_rebalance_interval": 3600,
+    },
+
+    # Infrastructure
+    "infrastructure": {
+        "vps_location": "eu-west",
+        "polygon_rpc": "https://rpc.ankr.com/polygon",
+        "websocket_reconnect_backoff": [1, 2, 4, 8, 16],
+    },
 }
 
 # ── Opportunity Windows (Endcycle Sniper pattern) ──────────────────────
@@ -138,15 +253,22 @@ def estimate_post_fee_edge(
     probability: Decimal,
     current_price: Decimal,
     size: Decimal,
+    slippage_bps: Decimal | None = None,
 ) -> Decimal:
-    """Estimate edge after accounting for dynamic taker fee and spread.
+    """Estimate edge after accounting for dynamic taker fee, spread, and slippage.
+
+    Uses the slippage model when slippage_bps is provided, otherwise falls back
+    to a 1-tick (1%) estimate for backward compatibility.
 
     Returns the post-fee edge as a Decimal. If negative, do not trade.
     """
     raw_edge = abs(probability - current_price)
     fee_rate = dynamic_taker_fee(current_price)
-    estimated_slippage = Decimal("0.01")  # 1 tick slippage estimate
-    post_fee = raw_edge - fee_rate - estimated_slippage
+    if slippage_bps is not None:
+        slippage_dec = slippage_bps / Decimal("10000")
+    else:
+        slippage_dec = Decimal("0.01")
+    post_fee = raw_edge - fee_rate - slippage_dec
     return post_fee.quantize(Decimal("0.0001"))
 
 # ── Sizing by Confidence Score ─────────────────────────────────────────

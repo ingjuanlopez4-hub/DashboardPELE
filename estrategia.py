@@ -19,6 +19,23 @@ from typing import Any
 import numpy as np
 
 from ingesta import NormalizedEvent
+from src.data.database import PolymarketDatabase
+from src.strategy.external_signal import (
+    SignalAggregator,
+    ChainlinkPriceFeed,
+    BinanceSignalFeed,
+    ExternalSignal,
+    SIGNAL_UP,
+    SIGNAL_DOWN,
+    SIGNAL_NEUTRAL,
+)
+from src.strategy.signal_weights import (
+    SignalWeightsManager,
+    SignalPerformanceTracker,
+    DEFAULT_WEIGHTS,
+    SIGNAL_SOURCES,
+)
+from src.strategy.monte_carlo import MonteCarloSimulator
 
 logger = logging.getLogger("estrategia")
 
@@ -26,19 +43,19 @@ DEFAULT_TICK_SIZE = Decimal("0.01")
 SIZE_PRECISION = Decimal("0.01")
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "wick_weight": Decimal("0.4"),
-    "sentiment_weight": Decimal("0.3"),
-    "montecarlo_weight": Decimal("0.3"),
-    "ev_threshold": Decimal("0.03"),
+    "ev_threshold": Decimal("0.02"),           # Reduced from 0.03
     "win_rate_threshold": Decimal("0.50"),
     "kelly_fraction": Decimal("0.25"),
+    "min_consensus": 2,                        # At least 2 modules must agree
     "analysis_interval": 5.0,
     "min_analysis_cooldown": 1.0,
     "book_snapshot_window": 100,
-    "montecarlo_paths": 10000,
     "news_cache_ttl": 300,
     "default_volatility": Decimal("0.50"),
     "default_days_to_expiry": 7,
+    "gbm_history_size": 10_000,
+    "min_edge": Decimal("0.02"),              # Reduced from 0.05
+    "max_position_size_pct": Decimal("3.0"),  # Max 3% per trade
 }
 
 SIGNAL_SIDES = {
@@ -83,13 +100,15 @@ class AssetState:
         "_last_snapshot_time",
     )
 
-    def __init__(self, asset_id: str, tick_size: Decimal) -> None:
+    def __init__(
+        self, asset_id: str, tick_size: Decimal, history_size: int = 10_000
+    ) -> None:
         self.asset_id = asset_id
         self.tick_size = tick_size
         self.current_bids: dict[Decimal, Decimal] = {}
         self.current_asks: dict[Decimal, Decimal] = {}
         self.snapshots: deque[BookSnapshot] = deque(maxlen=100)
-        self.price_history: deque[Decimal] = deque(maxlen=1000)
+        self.price_history: deque[Decimal] = deque(maxlen=history_size)
         self.last_price: Decimal | None = None
         self.best_bid: Decimal | None = None
         self.best_ask: Decimal | None = None
@@ -170,6 +189,11 @@ class MotorEstrategia:
         event_queue: asyncio.Queue,
         signal_queue: asyncio.Queue,
         config: dict[str, Any] | None = None,
+        signal_aggregator: SignalAggregator | None = None,
+        weights_manager: SignalWeightsManager | None = None,
+        performance_tracker: SignalPerformanceTracker | None = None,
+        monte_carlo_simulator: MonteCarloSimulator | None = None,
+        history_db_path: str | None = None,
     ) -> None:
         self.event_queue = event_queue
         self.signal_queue = signal_queue
@@ -179,6 +203,9 @@ class MotorEstrategia:
         self._market_meta: dict[str, dict[str, Any]] = {}
         self._resolved_markets: set[str] = set()
         self._resolved_assets: set[str] = set()
+        self._history_db_path = history_db_path
+        self._history_db: PolymarketDatabase | None = None
+        self._hydrated_assets: set[str] = set()
 
         self._sentiment_pipeline = None
         self._sentiment_lock = asyncio.Lock()
@@ -190,6 +217,21 @@ class MotorEstrategia:
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
+        # ── External signal (Chainlink/Binance) ─────────────────────────
+        self._signal_aggregator = signal_aggregator
+
+        # ── Dynamic weights manager ─────────────────────────────────────
+        self._weights_manager = weights_manager
+        self._perf_tracker = performance_tracker
+
+        # ── Monte Carlo (long-term only, reduced scope) ─────────────────
+        self._mc_simulator = monte_carlo_simulator or MonteCarloSimulator(
+            n_paths=self.config.get("montecarlo_paths", 1000),
+        )
+
+        # ── Track which market type each asset belongs to ───────────────
+        self._market_types: dict[str, str] = {}  # asset_id -> market_type
+
     # ------------------------------------------------------------------
     # Gestión de estado
     # ------------------------------------------------------------------
@@ -199,11 +241,35 @@ class MotorEstrategia:
     ) -> AssetState:
         if asset_id not in self._assets:
             self._assets[asset_id] = AssetState(
-                asset_id, tick_size or DEFAULT_TICK_SIZE
+                asset_id,
+                tick_size or DEFAULT_TICK_SIZE,
+                history_size=int(self.config["gbm_history_size"]),
             )
         elif tick_size is not None:
             self._assets[asset_id].tick_size = tick_size
         return self._assets[asset_id]
+
+    async def _hydrate_price_history(self, asset: AssetState) -> None:
+        """Load persisted prices once so GBM survives process restarts."""
+        if asset.asset_id in self._hydrated_assets or self._history_db is None:
+            return
+        rows = await self._history_db.get_token_price_history(
+            asset.asset_id,
+            limit=int(self.config["gbm_history_size"]),
+        )
+        live_prices = list(asset.price_history)
+        asset.price_history.clear()
+        asset.price_history.extend(
+            Decimal(str(row["mid_price"])) for row in rows
+        )
+        asset.price_history.extend(live_prices)
+        self._hydrated_assets.add(asset.asset_id)
+        if rows:
+            logger.info(
+                "GBM histórico cargado %s: %d puntos",
+                asset.asset_id,
+                len(rows),
+            )
 
     def _process_event(self, evt: NormalizedEvent) -> None:
         if evt.type == "book":
@@ -524,157 +590,149 @@ class MotorEstrategia:
         }
 
     # ------------------------------------------------------------------
-    # Monte Carlo
+    # Clasificador de mercado
     # ------------------------------------------------------------------
 
-    def _estimate_volatility(self, asset: AssetState) -> Decimal:
-        """Estima la volatilidad implícita desde el libro y precio histórico."""
-        vols: list[float] = []
+    def _classify_market(self, asset_id: str) -> str:
+        """Classify a market by its duration/type for weight selection.
 
-        if len(asset.price_history) >= 10:
-            prices_f = [float(p) for p in asset.price_history]
-            log_rets = [
-                math.log(prices_f[i] / prices_f[i - 1])
-                for i in range(1, len(prices_f))
-                if prices_f[i - 1] > 0 and prices_f[i] > 0
-            ]
-            if len(log_rets) >= 5:
-                hist_vol = float(np.std(log_rets)) * math.sqrt(252 * 24)
-                vols.append(min(hist_vol, 5.0))
+        Returns one of: "crypto_5min", "crypto_15min", "long_term".
 
-        if asset.spread is not None and asset.mid_price is not None and asset.mid_price > 0:
-            spread_pct = float(asset.spread / asset.mid_price)
-            spread_vol = spread_pct * math.sqrt(252 * 24)
-            vols.append(min(spread_vol, 5.0))
+        Uses market metadata duration if available, otherwise falls back
+        to default classification.
+        """
+        # Check cached classification
+        cached = self._market_types.get(asset_id)
+        if cached:
+            return cached
 
-        if not vols:
-            return self.config["default_volatility"]
-
-        return Decimal(str(np.mean(vols)))
-
-    def _days_to_expiry(self, asset_id: str) -> Decimal:
-        """Días hasta el cierre del mercado. Por defecto 7 si no hay metadata."""
+        # Try to find duration from market metadata
         for meta in self._market_meta.values():
             aids = meta.get("asset_ids") or meta.get("assets_ids") or meta.get("clob_token_ids") or []
             if asset_id in set(aids):
+                # Check for explicit market duration
+                duration_min = meta.get("duration_minutes")
+                if duration_min:
+                    if int(duration_min) <= 5:
+                        mt = "crypto_5min"
+                    elif int(duration_min) <= 15:
+                        mt = "crypto_15min"
+                    else:
+                        mt = "long_term"
+                    self._market_types[asset_id] = mt
+                    return mt
+
+                # Check end_date to compute days remaining
                 end_str = meta.get("end_date_iso") or meta.get("close_time") or meta.get("market_close")
                 if end_str:
                     try:
                         end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
-                        remaining = (end - datetime.now(timezone.utc)).total_seconds()
-                        return max(Decimal(str(remaining / 86400)), Decimal("0.001"))
+                        remaining_days = (end - datetime.now(timezone.utc)).total_seconds() / 86400
+                        if remaining_days <= 1:
+                            mt = "crypto_5min" if remaining_days <= 0.5 else "crypto_15min"
+                        else:
+                            mt = "long_term"
+                        self._market_types[asset_id] = mt
+                        return mt
                     except (ValueError, TypeError):
                         pass
                 break
-        return Decimal(str(self.config["default_days_to_expiry"]))
 
-    @staticmethod
-    def _logit(p: Decimal) -> float:
-        p_f = min(max(float(p), 1e-12), 1 - 1e-12)
-        return math.log(p_f / (1 - p_f))
+        # Default: long_term
+        self._market_types[asset_id] = "long_term"
+        return "long_term"
 
-    @staticmethod
-    def _sigmoid(x: float) -> float:
-        if x > 100:
-            return 1.0
-        if x < -100:
-            return 0.0
-        return 1.0 / (1.0 + math.exp(-x))
+    # ------------------------------------------------------------------
+    # Señal externa (Chainlink/Binance)
+    # ------------------------------------------------------------------
 
-    async def compute_montecarlo_signal(
-        self, asset_id: str
+    async def compute_external_signal(
+        self,
+        asset_id: str,
+        symbol: str | None = None,
     ) -> dict[str, Any]:
-        """Simula trayectorias de precio Monte Carlo usando GBM sobre log-odds.
+        """Compute external signal from Chainlink/Binance price feeds.
 
-        Retorna:
-            score (Decimal) — probabilidad Monte Carlo
-            probability (Decimal) — probabilidad final estimada
-            ev (Decimal) — valor esperado vs precio actual
-            details (dict) — parámetros de la simulación
+        Converts the SignalAggregator's ExternalSignal into the standard
+        signal dict format used by MotorEstrategia.
+
+        Parameters
+        ----------
+        asset_id : str
+            Polymarket asset/token ID.
+        symbol : str | None
+            Underlying asset symbol (e.g., "btcusdt"). If None, derived
+            from market metadata or asset_id.
+
+        Returns
+        -------
+        dict with keys: score, probability, direction, confidence, ev, details
         """
-        asset = self._assets.get(asset_id)
-        if asset is None:
+        if self._signal_aggregator is None:
             return {
                 "score": Decimal("0.5"),
-                "probability": self._current_probability(None),
+                "probability": self._current_probability(self._assets.get(asset_id)),
+                "direction": "NEUTRAL",
+                "confidence": Decimal("0"),
                 "ev": Decimal("0"),
-                "details": {"reason": "no_data"},
+                "details": {"reason": "no_aggregator"},
             }
 
-        current_price = self._current_probability(asset)
-        if current_price <= 0 or current_price >= 1:
+        # Try to get signal for this specific market/asset
+        signal = self._signal_aggregator.get_market_signal(asset_id)
+        if signal is None and symbol:
+            signal = self._signal_aggregator.get_latest_signal(symbol)
+
+        if signal is None:
             return {
-                "score": current_price,
-                "probability": current_price,
+                "score": Decimal("0.5"),
+                "probability": self._current_probability(self._assets.get(asset_id)),
+                "direction": "NEUTRAL",
+                "confidence": Decimal("0"),
                 "ev": Decimal("0"),
-                "details": {"reason": "price_boundary"},
+                "details": {"reason": "no_signal_from_feeds"},
             }
 
-        sigma = self._estimate_volatility(asset)
-        days = self._days_to_expiry(asset_id)
-        T = float(days) / 365.0
-        if T <= 0:
-            T = 1.0 / 365.0
+        # Convert ExternalSignal to standard signal dict
+        direction = signal.direction
+        if direction == SIGNAL_UP:
+            # UP means probability should increase
+            score = Decimal("0.5") + signal.confidence * Decimal("0.5")
+            direction_normalized = "UP"
+        elif direction == SIGNAL_DOWN:
+            score = Decimal("0.5") - signal.confidence * Decimal("0.5")
+            direction_normalized = "DOWN"
+        else:
+            score = Decimal("0.5")
+            direction_normalized = "NEUTRAL"
 
-        lo0 = self._logit(current_price)
-        mu = 0.0
-        n_paths = int(self.config["montecarlo_paths"])
-        tick = asset.tick_size
-
-        sigma_f = float(sigma)
-        dt = T
-
-        def _run_simulation(
-            lo0_f: float,
-            mu_f: float,
-            sigma_f: float,
-            dt_f: float,
-            n: int,
-            tick_f: float,
-        ) -> tuple[float, float, float]:
-            rng = np.random.default_rng()
-            z = rng.standard_normal(n)
-            lo_T = lo0_f + (mu_f - 0.5 * sigma_f * sigma_f) * dt_f + sigma_f * math.sqrt(dt_f) * z
-            p_T = np.array([min(max(self._sigmoid(x), 1e-12), 1 - 1e-12) for x in lo_T])
-            mean_p = float(np.mean(p_T))
-            std_p = float(np.std(p_T))
-            return mean_p, std_p, float(np.percentile(p_T, 5))
-
-        try:
-            mean_p, std_p, p5 = await asyncio.to_thread(
-                _run_simulation, lo0, mu, sigma_f, T, n_paths, float(tick)
-            )
-        except Exception:
-            logger.exception("error en simulación Monte Carlo para %s", asset_id)
-            return {
-                "score": current_price,
-                "probability": current_price,
-                "ev": Decimal("0"),
-                "details": {"error": "simulation_failed"},
-            }
-
-        mc_prob = Decimal(str(mean_p))
-        mc_prob = max(Decimal("0.001"), min(mc_prob, Decimal("0.999")))
-        mc_prob = mc_prob.quantize(tick, rounding=ROUND_HALF_UP)
-
-        ev = mc_prob - current_price
+        current_price = self._current_probability(self._assets.get(asset_id))
+        ev = abs(score - current_price)
 
         return {
-            "score": mc_prob,
-            "probability": mc_prob,
-            "ev": ev.quantize(tick, rounding=ROUND_HALF_UP),
+            "score": score.quantize(SIZE_PRECISION, rounding=ROUND_HALF_UP),
+            "probability": score.quantize(
+                self._tick_for(asset_id), rounding=ROUND_HALF_UP
+            ),
+            "direction": direction_normalized,
+            "confidence": signal.confidence,
+            "signal": direction_normalized,
+            "ev": ev.quantize(SIZE_PRECISION, rounding=ROUND_HALF_UP),
             "details": {
-                "sigma": str(sigma),
-                "days_to_expiry": str(days),
-                "T_years": round(T, 6),
-                "std_p": round(std_p, 6),
-                "p5": round(p5, 6),
-                "n_paths": n_paths,
+                "source": signal.source,
+                "distance_pct": str(signal.distance_pct),
+                "current_price": str(signal.current_price),
+                "strike_price": str(signal.strike_price),
+                "symbol": signal.symbol,
             },
         }
 
     # ------------------------------------------------------------------
     # Generación de señales
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Helpers
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -687,13 +745,56 @@ class MotorEstrategia:
         asset = self._assets.get(asset_id)
         return asset.tick_size if asset else DEFAULT_TICK_SIZE
 
+    def _days_to_expiry_mc(self, asset_id: str) -> Decimal | None:
+        """Estimate days to expiry from market metadata for Monte Carlo."""
+        for meta in self._market_meta.values():
+            aids = (
+                meta.get("asset_ids")
+                or meta.get("assets_ids")
+                or meta.get("clob_token_ids")
+                or []
+            )
+            if asset_id in set(aids):
+                end_str = (
+                    meta.get("end_date_iso")
+                    or meta.get("close_time")
+                    or meta.get("market_close")
+                )
+                if end_str:
+                    try:
+                        end = datetime.fromisoformat(
+                            end_str.replace("Z", "+00:00")
+                        )
+                        remaining = (
+                            end - datetime.now(timezone.utc)
+                        ).total_seconds()
+                        return max(
+                            Decimal(str(remaining / 86400)),
+                            Decimal("0.001"),
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                break
+        return None
+
     async def _compute_signal(
         self, asset_id: str
     ) -> dict[str, Any] | None:
-        """Calcula la señal combinada para un activo y la retorna como dict."""
+        """Calcula la señal combinada para un activo usando pesos dinámicos y consenso.
+
+        Pipeline:
+          1. Clasificar mercado (crypto_5min / crypto_15min / long_term)
+          2. Obtener señales de todos los módulos activos
+          3. Aplicar matriz de pesos dinámicos
+          4. Verificar consenso mínimo (≥2 módulos deben coincidir)
+          5. Calcular Kelly fraccional
+          6. Retornar señal o None
+        """
         asset = self._assets.get(asset_id)
         if asset is None:
             return None
+
+        await self._hydrate_price_history(asset)
 
         current_price = self._current_probability(asset)
         if current_price <= 0 or current_price >= 1:
@@ -701,25 +802,153 @@ class MotorEstrategia:
 
         asset.snapshot()
 
+        # 1. Classify market
+        market_type = self._classify_market(asset_id)
+
+        # 2. Estimate volatility for Monte Carlo (only for long-term)
+        mc_volatility = None
+        mc_days_to_expiry = self._days_to_expiry_mc(asset_id)
+        if len(asset.price_history) >= 5:
+            mc_volatility = MonteCarloSimulator._estimate_volatility(
+                list(asset.price_history), asset.spread, asset.mid_price
+            )
+
+        # Compute signals from all active sources
         wick_result = self.compute_wick_signal(asset_id)
-        sent_result = await self.compute_sentiment_signal(asset_id)
-        mc_result = await self.compute_montecarlo_signal(asset_id)
 
-        w_w = self.config["wick_weight"]
-        w_s = self.config["sentiment_weight"]
-        w_m = self.config["montecarlo_weight"]
+        sent_result = None
+        if market_type == "long_term":
+            sent_result = await self.compute_sentiment_signal(asset_id)
+        else:
+            # FinBERT disabled for short-term markets (latency)
+            sent_result = {
+                "score": Decimal("0.5"),
+                "probability": current_price,
+                "direction": "NEUTRAL",
+            }
 
-        combined_prob = (
-            w_w * wick_result["probability"]
-            + w_s * sent_result["probability"]
-            + w_m * mc_result["probability"]
+        mc_result = await self._mc_simulator.simulate(
+            current_price=current_price,
+            volatility=mc_volatility,
+            days_to_expiry=mc_days_to_expiry,
+            tick_size=asset.tick_size,
+            price_history=list(asset.price_history) if len(asset.price_history) >= 2 else None,
+            spread=asset.spread,
+            mid_price=asset.mid_price,
+            asset_id=asset_id,
         )
-        combined_prob = max(Decimal("0.001"), min(combined_prob, Decimal("0.999")))
 
-        ev = combined_prob - current_price
+        external_result = await self.compute_external_signal(asset_id)
+
+        # 3. Gather signals into standardized format
+        signals: dict[str, dict[str, Any]] = {}
+
+        signals["wick"] = {
+            "score": wick_result["score"],
+            "probability": wick_result["probability"],
+            "direction": "UP" if wick_result["score"] > Decimal("0.5") else ("DOWN" if wick_result["score"] < Decimal("0.5") else "NEUTRAL"),
+            "signal": "UP" if wick_result["score"] > Decimal("0.5") else ("DOWN" if wick_result["score"] < Decimal("0.5") else "NONE"),
+            "confidence": (abs(wick_result["score"] - Decimal("0.5")) * Decimal("2")).quantize(SIZE_PRECISION),
+        }
+
+        signals["external"] = {
+            "score": external_result["score"],
+            "probability": external_result.get("probability", current_price),
+            "direction": external_result.get("direction", "NEUTRAL"),
+            "signal": external_result.get("direction", "NEUTRAL"),
+            "confidence": external_result.get("confidence", Decimal("0")),
+        }
+
+        # FinBERT only active for long_term markets
+        if sent_result is not None and market_type == "long_term":
+            signals["finbert"] = {
+                "score": sent_result["score"],
+                "probability": sent_result["probability"],
+                "direction": "UP" if sent_result["score"] > Decimal("0.5") else ("DOWN" if sent_result["score"] < Decimal("0.5") else "NEUTRAL"),
+                "signal": "UP" if sent_result["score"] > Decimal("0.5") else ("DOWN" if sent_result["score"] < Decimal("0.5") else "NONE"),
+                "confidence": (abs(sent_result["score"] - Decimal("0.5")) * Decimal("2")).quantize(SIZE_PRECISION),
+            }
+        else:
+            signals["finbert"] = {
+                "score": Decimal("0.5"),
+                "probability": current_price,
+                "direction": "NEUTRAL",
+                "signal": "NONE",
+                "confidence": Decimal("0"),
+            }
+
+        # Monte Carlo only active for long_term markets (or throttled)
+        if mc_result.get("details", {}).get("disabled", False):
+            signals["montecarlo"] = {
+                "score": current_price,
+                "probability": current_price,
+                "direction": "NEUTRAL",
+                "signal": "NONE",
+                "confidence": Decimal("0"),
+            }
+        else:
+            signals["montecarlo"] = {
+                "score": mc_result.get("score", Decimal("0.5")),
+                "probability": mc_result.get("probability", current_price),
+                "direction": "UP" if mc_result.get("score", Decimal("0.5")) > current_price else ("DOWN" if mc_result.get("score", Decimal("0.5")) < current_price else "NEUTRAL"),
+                "signal": "UP" if mc_result.get("score", Decimal("0.5")) > current_price else ("DOWN" if mc_result.get("score", Decimal("0.5")) < current_price else "NONE"),
+                "confidence": (abs(mc_result.get("ev", Decimal("0"))) * Decimal("10")).quantize(SIZE_PRECISION),
+            }
+
+        # 4. Apply dynamic weights and check consensus
+        if self._weights_manager is not None:
+            # Use dynamic weights
+            consensus_passed, consensus_reason = self._weights_manager.check_consensus(
+                signals=signals,
+                market_type=market_type,
+                min_consensus=int(self.config.get("min_consensus", 2)),
+            )
+
+            if not consensus_passed:
+                logger.debug(
+                    "Consenso no alcanzado para %s (tipo=%s): %s",
+                    asset_id, market_type, consensus_reason,
+                )
+                return None
+
+            weighted = self._weights_manager.compute_weighted_signal(
+                signals=signals,
+                market_type=market_type,
+            )
+
+            combined_prob = weighted["composite_score"]
+            direction = weighted["direction"]
+            composite_confidence = weighted["confidence"]
+            ev = weighted["ev"]
+            sources_agreeing = weighted["sources_agreeing"]
+            total_active = weighted["total_active_sources"]
+        else:
+            # Fallback: simple average of all active sources
+            active_sigs = [(k, v) for k, v in signals.items()
+                           if v.get("signal", "NONE") != "NONE" and v.get("confidence", 0) > 0]
+
+            if len(active_sigs) < int(self.config.get("min_consensus", 2)):
+                return None
+
+            avg_prob = sum(s["probability"] for _, s in active_sigs) / Decimal(str(len(active_sigs)))
+            combined_prob = max(Decimal("0.001"), min(avg_prob, Decimal("0.999")))
+            ev = combined_prob - current_price
+            direction = "UP" if ev > 0 else "DOWN"
+            composite_confidence = sum(s["confidence"] for _, s in active_sigs) / Decimal(str(len(active_sigs)))
+            sources_agreeing = len([s for _, s in active_sigs if (
+                (s.get("signal") == "UP" and ev > 0) or
+                (s.get("signal") == "DOWN" and ev < 0)
+            )])
+            total_active = len(active_sigs)
+
         abs_ev = abs(ev)
+        min_edge = self.config.get("min_edge", Decimal("0.02"))
 
-        if abs_ev < self.config["ev_threshold"]:
+        if abs_ev < min_edge:
+            logger.debug(
+                "Señal %s: ev=%s < min_edge=%s — descartada",
+                asset_id, abs_ev, min_edge,
+            )
             return None
 
         if ev > 0:
@@ -727,11 +956,11 @@ class MotorEstrategia:
             win_rate = combined_prob
             kelly_raw = (combined_prob - current_price) / (
                 Decimal("1") - current_price
-            )
+            ) if current_price < 1 else Decimal("0")
         else:
             side = "BUY_NO"
             win_rate = Decimal("1") - combined_prob
-            kelly_raw = (current_price - combined_prob) / current_price
+            kelly_raw = (current_price - combined_prob) / current_price if current_price > 0 else Decimal("0")
 
         if kelly_raw <= 0:
             return None
@@ -739,12 +968,18 @@ class MotorEstrategia:
         if win_rate < self.config["win_rate_threshold"]:
             return None
 
-        kelly_fractional = kelly_raw * self.config["kelly_fraction"]
+        # Apply position size cap (max 3% of bankroll per trade)
+        max_pos_size_pct = self.config.get("max_position_size_pct", Decimal("3.0"))
+        kelly_fractional = min(
+            kelly_raw * self.config["kelly_fraction"],
+            max_pos_size_pct / Decimal("100"),
+        )
 
         tick = asset.tick_size
         signal: dict[str, Any] = {
             "asset_id": asset_id,
             "market": self._find_market_for_asset(asset_id),
+            "market_type": market_type,
             "side": side,
             "probability": combined_prob.quantize(tick, rounding=ROUND_HALF_UP),
             "ev": ev.quantize(tick, rounding=ROUND_HALF_UP),
@@ -758,19 +993,30 @@ class MotorEstrategia:
             "current_price": current_price.quantize(
                 tick, rounding=ROUND_HALF_UP
             ),
+            "price": current_price.quantize(tick, rounding=ROUND_HALF_UP),
             "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+            "direction": direction,
+            "confidence": composite_confidence.quantize(SIZE_PRECISION, rounding=ROUND_HALF_UP),
+            "sources_agreeing": sources_agreeing,
+            "total_active_sources": total_active,
             "components": {
                 "wick": {
                     "score": str(wick_result["score"]),
                     "prob": str(wick_result["probability"]),
                 },
+                "external": {
+                    "direction": external_result.get("direction", "NEUTRAL"),
+                    "confidence": str(external_result.get("confidence", "0")),
+                    "details": external_result.get("details", {}),
+                },
                 "sentiment": {
-                    "score": str(sent_result["score"]),
-                    "prob": str(sent_result["probability"]),
+                    "score": str(sent_result["score"]) if sent_result else "0.5",
+                    "prob": str(sent_result["probability"]) if sent_result else str(current_price),
                 },
                 "montecarlo": {
-                    "prob": str(mc_result["probability"]),
+                    "prob": str(mc_result.get("probability", "0.5")),
                     "ev": str(mc_result.get("ev", "0")),
+                    "details": mc_result.get("details", {}),
                 },
             },
         }
@@ -818,6 +1064,8 @@ class MotorEstrategia:
     async def run(self) -> None:
         """Bucle principal: consume eventos y ejecuta análisis periódico."""
         self._running = True
+        if self._history_db_path:
+            self._history_db = await PolymarketDatabase.create(self._history_db_path)
         logger.info("MotorEstrategia iniciado")
 
         async def _periodic_analysis() -> None:
@@ -872,6 +1120,9 @@ class MotorEstrategia:
                 if not t.done():
                     t.cancel()
             await asyncio.gather(*self._tasks, return_exceptions=True)
+            if self._history_db is not None:
+                await self._history_db.close()
+                self._history_db = None
             logger.info("MotorEstrategia detenido")
 
     def stop(self) -> None:

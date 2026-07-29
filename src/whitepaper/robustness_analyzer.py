@@ -59,6 +59,7 @@ class RobustnessAnalyzer:
         equity_curve: Optional[list[Decimal]] = None,
         markets: Optional[list[TrackedMarket]] = None,
         backtest_results: Optional[BacktestResults] = None,
+        db: Any | None = None,
     ) -> RobustnessResults:
         """Run all robustness tests and return combined results.
 
@@ -95,7 +96,7 @@ class RobustnessAnalyzer:
             results.mc_lower_99 = mc_result["lower_99"]
 
         if markets and backtest_results is not None:
-            oos_result = await self.out_of_sample_test(markets, backtest_results)
+            oos_result = await self.out_of_sample_test(markets, backtest_results, db=db)
             results.train_sharpe = oos_result["train_sharpe"]
             results.test_sharpe = oos_result["test_sharpe"]
             results.train_pnl = oos_result["train_pnl"]
@@ -238,6 +239,7 @@ class RobustnessAnalyzer:
         self,
         markets: list[TrackedMarket],
         backtest_results: BacktestResults,
+        db: Any | None = None,
         train_ratio: float = 0.7,
     ) -> dict[str, Any]:
         """Out-of-sample test by splitting markets into train/test sets.
@@ -274,9 +276,20 @@ class RobustnessAnalyzer:
         test_markets = shuffled[split_idx:]
 
         runner = StrategyBacktestRunner(
-            backtest_results._db if hasattr(backtest_results, "_db") else None,
+            db=db,
             params=backtest_results.params_used,
         )
+
+        # If no db available, skip OOS backtest
+        if db is None:
+            logger.warning("No database available for OOS test — skipping")
+            return {
+                "train_sharpe": 0.0,
+                "test_sharpe": 0.0,
+                "train_pnl": Decimal("0"),
+                "test_pnl": Decimal("0"),
+                "sharpe_drop": 0.0,
+            }
 
         train_result = await runner.run_backtest(train_markets)
         test_result = await runner.run_backtest(test_markets)

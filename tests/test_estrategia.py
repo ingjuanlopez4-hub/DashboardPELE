@@ -26,6 +26,7 @@ from estrategia import (
     DEFAULT_CONFIG,
 )
 from ingesta import NormalizedEvent
+from src.data.database import MarketInfo, OrderBookSnapshot, PolymarketDatabase
 
 
 # =========================================================================
@@ -33,6 +34,15 @@ from ingesta import NormalizedEvent
 # =========================================================================
 
 class TestAssetState:
+
+    def test_price_history_capacity_is_configurable(self):
+        asset = AssetState("0xabc", Decimal("0.01"), history_size=3)
+        asset.price_history.extend(
+            [Decimal("0.1"), Decimal("0.2"), Decimal("0.3"), Decimal("0.4")]
+        )
+        assert list(asset.price_history) == [
+            Decimal("0.2"), Decimal("0.3"), Decimal("0.4")
+        ]
 
     def test_update_bid_adds_and_removes(self):
         asset = AssetState("0xabc", Decimal("0.01"))
@@ -103,6 +113,36 @@ class TestAssetState:
 # =========================================================================
 
 class TestMotorEstrategiaEventProcessing:
+
+    @pytest.mark.asyncio
+    async def test_hydrates_gbm_history_from_database(self):
+        db = await PolymarketDatabase.create(":memory:")
+        try:
+            await db.upsert_market(MarketInfo(
+                id="m1", condition_id="c1", question="Test market"
+            ))
+            for price in ("0.41", "0.42", "0.43"):
+                await db.insert_orderbook_snapshot(
+                    OrderBookSnapshot(
+                        market_id="m1",
+                        token_id="0xabc",
+                        mid_price=Decimal(price),
+                    )
+                )
+            motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue())
+            motor._history_db = db
+            asset = motor._get_or_create_asset("0xabc")
+            asset.price_history.append(Decimal("0.44"))
+
+            await motor._hydrate_price_history(asset)
+            await motor._hydrate_price_history(asset)
+
+            assert list(asset.price_history) == [
+                Decimal("0.41"), Decimal("0.42"),
+                Decimal("0.43"), Decimal("0.44"),
+            ]
+        finally:
+            await db.close()
 
     def test_process_book_event_creates_asset(self):
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue())
@@ -356,7 +396,7 @@ class TestSentiment:
 
 
 # =========================================================================
-# Monte Carlo Simulation
+# Monte Carlo Simulation (via MonteCarloSimulator)
 # =========================================================================
 
 class TestMonteCarlo:
@@ -374,7 +414,16 @@ class TestMonteCarlo:
         ])
         motor._assets["0xabc"] = asset
 
-        result = await motor.compute_montecarlo_signal("0xabc")
+        # Use MonteCarloSimulator directly
+        from src.strategy.monte_carlo import MonteCarloSimulator
+        simulator = MonteCarloSimulator(n_paths=100)
+        result = await simulator.simulate(
+            current_price=Decimal("0.50"),
+            volatility=Decimal("0.50"),
+            days_to_expiry=Decimal("30"),
+            tick_size=Decimal("0.01"),
+            asset_id="0xabc",
+        )
         assert isinstance(result["score"], Decimal)
         assert isinstance(result["probability"], Decimal)
         assert isinstance(result["ev"], Decimal)
@@ -382,35 +431,53 @@ class TestMonteCarlo:
     async def test_montecarlo_price_within_expected_range(self):
         """With 10000 paths, price should be near 0.50 for symmetric asset."""
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue())
-        motor.config["montecarlo_paths"] = 10000
         asset = AssetState("0xabc", Decimal("0.01"))
         asset.last_price = Decimal("0.50")
         asset.price_history.extend([Decimal("0.50")] * 20)
         motor._assets["0xabc"] = asset
 
-        result = await motor.compute_montecarlo_signal("0xabc")
+        from src.strategy.monte_carlo import MonteCarloSimulator
+        simulator = MonteCarloSimulator(n_paths=1000)
+        result = await simulator.simulate(
+            current_price=Decimal("0.50"),
+            volatility=Decimal("0.50"),
+            days_to_expiry=Decimal("30"),
+            tick_size=Decimal("0.01"),
+            asset_id="0xabc",
+        )
         mc_prob = result["probability"]
         # Should be within 0.50 +/- 0.10
         assert Decimal("0.40") <= mc_prob <= Decimal("0.60")
 
     async def test_montecarlo_price_boundary(self):
-        """When current_price is at boundary (0 or 1), MC returns the price itself."""
-        motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue())
-        asset = AssetState("0xabc", Decimal("0.01"))
-        # _current_probability returns 0.5 when mid_price/last_price are falsy.
-        # With price 1, mid_price=1 is truthy so boundary is hit.
-        asset.update_bid(Decimal("1"), Decimal("100"))
-        asset.update_ask(Decimal("1"), Decimal("100"))
-        motor._assets["0xabc"] = asset
-
-        result = await motor.compute_montecarlo_signal("0xabc")
+        """When current_price is at boundary (0 or 1), MC returns boundary."""
+        from src.strategy.monte_carlo import MonteCarloSimulator
+        simulator = MonteCarloSimulator()
+        result = await simulator.simulate(
+            current_price=Decimal("1"),
+            tick_size=Decimal("0.01"),
+            asset_id="0xabc",
+        )
         assert result["details"].get("reason") == "price_boundary"
 
     async def test_montecarlo_no_data(self):
         """No asset should return neutral."""
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue())
-        result = await motor.compute_montecarlo_signal("nonexistent")
-        assert result["details"]["reason"] == "no_data"
+        result = await motor._compute_signal("nonexistent")
+        assert result is None
+
+    async def test_montecarlo_short_term_disabled(self):
+        """Short-term markets should have MC disabled."""
+        from src.strategy.monte_carlo import MonteCarloSimulator
+        simulator = MonteCarloSimulator()
+        result = await simulator.simulate(
+            current_price=Decimal("0.50"),
+            days_to_expiry=Decimal("0.1"),  # Less than 7 days
+            tick_size=Decimal("0.01"),
+            asset_id="0xabc",
+        )
+        assert result["details"].get("disabled") is True
+        assert result["details"]["reason"] == "short_term_market"
 
 
 # =========================================================================
@@ -435,6 +502,7 @@ class TestSignalGeneration:
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue(), {
             "ev_threshold": Decimal("0.01"),
             "win_rate_threshold": Decimal("0.30"),
+            "min_consensus": 1,  # Only need 1 module for test
         })
         asset = AssetState("0xabc", Decimal("0.01"))
         asset.last_price = Decimal("0.50")
@@ -455,6 +523,7 @@ class TestSignalGeneration:
 
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue(), {
             "ev_threshold": Decimal("100"),  # impossible to exceed
+            "min_consensus": 1,  # Only need 1 module for test
         })
         asset = AssetState("0xabc", Decimal("0.01"))
         asset.last_price = Decimal("0.50")
@@ -473,6 +542,7 @@ class TestSignalGeneration:
             "ev_threshold": Decimal("0.001"),
             "win_rate_threshold": Decimal("0.0"),
             "kelly_fraction": Decimal("0.25"),
+            "min_consensus": 1,  # Only need 1 module for test
         })
         asset = AssetState("0xabc", Decimal("0.01"))
         asset.last_price = Decimal("0.50")
@@ -491,6 +561,7 @@ class TestSignalGeneration:
         motor = MotorEstrategia(asyncio.Queue(), asyncio.Queue(), {
             "ev_threshold": Decimal("0.001"),
             "win_rate_threshold": Decimal("0.0"),
+            "min_consensus": 1,  # Only need 1 module for test
         })
         asset = AssetState("0xabc", Decimal("0.01"))
         asset.last_price = Decimal("0.50")

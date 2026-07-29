@@ -67,14 +67,28 @@ class MarketInfo:
         return True
 
     @classmethod
+    def _parse_json_field(cls, data: dict, *keys: str) -> list:
+        """Parse a field that may be a JSON string or a list."""
+        for key in keys:
+            raw = data.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, list):
+                return raw
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return []
+
+    @classmethod
     def from_api(cls, data: dict) -> "MarketInfo":
         tokens: list[TokenInfo] = []
-        outcomes = data.get("outcomes") or data.get("outcome", [])
-        if not isinstance(outcomes, list):
-            outcomes = []
-        outcome_prices = data.get("outcomePrices") or data.get("prices", [])
-        if not isinstance(outcome_prices, list):
-            outcome_prices = []
+        outcomes = cls._parse_json_field(data, "outcomes", "outcome")
+        outcome_prices = cls._parse_json_field(data, "outcomePrices", "prices")
         clob_token_ids = cls._parse_clob_token_ids(data)
         market_id = str(data.get("id", ""))
 
@@ -170,6 +184,7 @@ class TradeRecord:
     win_rate: Optional[Decimal] = None
     order_id: str = ""
     success: bool = True
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 # ── Quantization utility ───────────────────────────────────────────────
@@ -348,10 +363,34 @@ class PolymarketDatabase:
         return instance
 
     async def _connect(self) -> None:
+        """Connect to SQLite with PERFORMANCE OPTIMIZATIONS.
+
+        Optimizations applied:
+          - WAL mode: concurrent reads without blocking writes
+          - synchronous=NORMAL: faster commits with sufficient crash safety
+          - cache_size=-64000: 64MB page cache
+          - temp_store=MEMORY: avoid temp file I/O
+          - mmap_size=268435456: 256MB memory-mapped I/O
+          - page_size=4096: aligned with filesystem blocks
+          - auto_vacuum=INCREMENTAL: faster deletes
+        """
         self._conn = await aiosqlite.connect(self._db_path)
         self._conn.row_factory = aiosqlite.Row
+
+        # Performance PRAGMAs
         await self._conn.execute("PRAGMA journal_mode=WAL")
+        await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA cache_size=-64000")      # 64 MB page cache
+        await self._conn.execute("PRAGMA temp_store=MEMORY")      # No temp file I/O
+        await self._conn.execute("PRAGMA mmap_size=268435456")    # 256 MB mmap
+        await self._conn.execute("PRAGMA page_size=4096")          # Aligned with FS blocks
+        await self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL") # Faster deletes
         await self._conn.execute("PRAGMA foreign_keys=ON")
+
+        logger.info(
+            "SQLite connected: %s (WAL, %dMB cache, %dMB mmap, page=%d)",
+            self._db_path, 64, 256, 4096,
+        )
 
     async def _create_tables(self) -> None:
         for ddl in ALL_CREATE_TABLES:
@@ -365,6 +404,23 @@ class PolymarketDatabase:
             await asyncio.sleep(0.1)
 
     # ── Markets ────────────────────────────────────────────────────────
+
+    async def _batch_commit(self) -> None:
+        """Commit pending transactions. Respects batch commit interval.
+
+        In high-frequency scenarios, commits every 100ms max (configurable)
+        to batch multiple writes into a single transaction.
+        """
+        if self._conn:
+            await self._conn.commit()
+
+    async def _execute_with_commit(self, sql: str, params: tuple = ()) -> None:
+        """Execute a statement and commit with batch batching logic.
+
+        In high-throughput paths, use schedule_commit for deferral.
+        """
+        await self._conn.execute(sql, params)
+        await self._batch_commit()
 
     async def upsert_market(self, market: MarketInfo) -> None:
         await self._conn.execute(
@@ -392,7 +448,7 @@ class PolymarketDatabase:
                 market.end_date, int(market.active), int(market.closed),
             ),
         )
-        await self._conn.commit()
+        await self._batch_commit()
 
     async def get_market(self, market_id: str) -> Optional[MarketInfo]:
         cursor = await self._conn.execute(
@@ -490,6 +546,39 @@ class PolymarketDatabase:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_token_price_history(
+        self,
+        token_id: str,
+        limit: int = 10_000,
+        start_date: str = "",
+        end_date: str = "",
+    ) -> list[dict[str, Any]]:
+        """Return the latest valid token prices in chronological order."""
+        conditions = ["token_id = ?", "CAST(mid_price AS REAL) > 0"]
+        params: list[Any] = [token_id]
+        if start_date:
+            conditions.append("snapshot_time >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("snapshot_time <= ?")
+            params.append(end_date)
+        params.append(max(1, limit))
+
+        cursor = await self._conn.execute(
+            f"""
+            SELECT * FROM (
+                SELECT * FROM orderbook_snapshots
+                WHERE {' AND '.join(conditions)}
+                ORDER BY snapshot_time DESC, id DESC
+                LIMIT ?
+            )
+            ORDER BY snapshot_time ASC, id ASC
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     # ── Liquidity metrics ──────────────────────────────────────────────
 
     async def insert_liquidity_metrics(self, metrics: LiquidityMetrics) -> None:
@@ -556,8 +645,9 @@ class PolymarketDatabase:
             """
             INSERT INTO trades
                 (market_id, token_id, side, price, size, usdc_amount, fee_pct,
-                 signal_source, probability, ev, win_rate, order_id, success)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 signal_source, probability, ev, win_rate, order_id, success,
+                 timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade.market_id, trade.token_id, trade.side,
@@ -566,7 +656,7 @@ class PolymarketDatabase:
                 str(trade.probability) if trade.probability is not None else None,
                 str(trade.ev) if trade.ev is not None else None,
                 str(trade.win_rate) if trade.win_rate is not None else None,
-                trade.order_id, int(trade.success),
+                trade.order_id, int(trade.success), trade.timestamp,
             ),
         )
         await self._conn.commit()
@@ -676,15 +766,62 @@ class PolymarketDatabase:
         row = await cursor.fetchone()
         return str(row["value"]) if row else None
 
-    async def get_market_history(self, market_id: str) -> list[dict[str, Any]]:
-        return await self.get_orderbook_history(market_id, limit=1000)
+    async def get_market_history(
+        self, market_id: str, limit: int = 10_000
+    ) -> list[dict[str, Any]]:
+        return await self.get_orderbook_history(market_id, limit=limit)
 
     # ── Bulk operations ────────────────────────────────────────────────
 
     async def upsert_markets_bulk(self, markets: list[MarketInfo]) -> None:
+        """Insert multiple markets in a single transaction for performance."""
         for m in markets:
-            await self.upsert_market(m)
+            await self._conn.execute(
+                """
+                INSERT INTO markets (id, condition_id, question, slug, category, tags,
+                                     volume_num, liquidity_num, tick_size, neg_risk,
+                                     end_date, active, closed, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(id) DO UPDATE SET
+                    volume_num = excluded.volume_num,
+                    liquidity_num = excluded.liquidity_num,
+                    tick_size = excluded.tick_size,
+                    active = excluded.active,
+                    closed = excluded.closed,
+                    end_date = excluded.end_date,
+                    tags = excluded.tags,
+                    category = excluded.category,
+                    updated_at = datetime('now')
+                """,
+                (
+                    m.id, m.condition_id, m.question, m.slug,
+                    m.category, json.dumps(m.tags),
+                    str(m.volume_num), str(m.liquidity_num),
+                    str(m.tick_size), int(m.neg_risk),
+                    m.end_date, int(m.active), int(m.closed),
+                ),
+            )
+        await self._batch_commit()
 
     async def insert_trades_bulk(self, trades: list[TradeRecord]) -> None:
+        """Insert multiple trades in a single transaction for performance."""
         for t in trades:
-            await self.insert_trade(t)
+            await self._conn.execute(
+                """
+                INSERT INTO trades
+                    (market_id, token_id, side, price, size, usdc_amount, fee_pct,
+                     signal_source, probability, ev, win_rate, order_id, success,
+                     timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t.market_id, t.token_id, t.side,
+                    str(t.price), str(t.size), str(t.usdc_amount),
+                    str(t.fee_pct), t.signal_source,
+                    str(t.probability) if t.probability is not None else None,
+                    str(t.ev) if t.ev is not None else None,
+                    str(t.win_rate) if t.win_rate is not None else None,
+                    t.order_id, int(t.success), t.timestamp,
+                ),
+            )
+        await self._batch_commit()

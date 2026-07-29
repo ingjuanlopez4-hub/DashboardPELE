@@ -25,8 +25,12 @@ import signal
 import sys
 from decimal import Decimal
 
+from dotenv import load_dotenv
+
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _project_root)
+
+load_dotenv(os.path.join(_project_root, ".env"))
 
 from estrategia import MotorEstrategia
 from ejecucion import EjecutorOrdenes
@@ -104,6 +108,10 @@ async def main() -> int:
             logger.error(
                 "Missing required env vars for live trading: %s", ", ".join(missing)
             )
+            logger.error(
+                "PRIVATE_KEY is needed for WebSocket L1 auth; "
+                "API_KEY/SECRET/PASSPHRASE are needed for REST order execution"
+            )
             logger.error("Run with --dry-run to test without live funds")
             return 1
 
@@ -113,13 +121,13 @@ async def main() -> int:
     logger.info("  DB path: %s", args.db)
     logger.info("=" * 50)
 
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
     signal_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
-    ingesta = IngestaCLOB(event_queue=event_queue)
+    ingesta = IngestaCLOB()
     estrategia = MotorEstrategia(
-        event_queue=event_queue,
+        event_queue=ingesta.queue,
         signal_queue=signal_queue,
+        history_db_path=args.db,
     )
     ejecutor = EjecutorOrdenes(
         signal_queue=signal_queue,

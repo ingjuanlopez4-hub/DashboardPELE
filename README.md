@@ -18,7 +18,7 @@
 |---|---|---|
 | **Wick‑Fishing** | Order book snapshots (CLOB) | Detects large bid/ask placements that are suddenly removed — a common manipulation pattern. Produces an adjusted probability signal. |
 | **FinBERT** | NewsAPI, RSS, Reddit | Financial sentiment analysis via `ProsusAI/finbert`. Cascading fallback: ONNX → PyTorch → neutral. Singleton model, cached per‑market. |
-| **Monte Carlo** | Market data (implied vol, spread) | 10,000 Geometric Brownian Motion paths in log‑odds space. Returns expected value distribution and confidence bands. |
+| **Monte Carlo** | Market data (implied vol, spread) | Vectorized Geometric Brownian Motion in log‑odds space, calibrated with up to 10,000 persisted token prices. Returns expected value distribution and confidence bands. |
 
 Signals are fused via configurable weights (`w_wick`, `w_sentiment`, `w_montecarlo`).
 
@@ -27,7 +27,7 @@ Signals are fused via configurable weights (`w_wick`, `w_sentiment`, `w_montecar
 1. **Market Discovery** — Fetches all active Polymarket markets via the Gamma API (with pagination, retries, rate limiting).
 2. **Liquidity Scoring** — Weighted score from volume, order‑book depth, spread, bid/ask ratio, and time to resolution.
 3. **Market Selection** — Configurable thresholds (min score, volume, liquidity, probability range, days to resolution).
-4. **Backtest** — Runs the fused strategy on historical data across selected markets.
+4. **Backtest** — Chronologically replays persisted per-token prices (with date filters and an explicit synthetic fallback) across selected markets.
 5. **Parameter Sweep** — Grid search over `min_edge`, `kelly_fraction`, `max_position_size`, and signal weights.
 6. **Robustness Analysis** — Permutation test (10,000 shuffles), Monte Carlo equity bands (95/99%), out‑of‑sample test.
 7. **Whitepaper Generation** — Professional HTML report with Plotly interactive charts (equity curves, drawdown, heatmaps, distributions).

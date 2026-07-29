@@ -26,7 +26,7 @@ SAMPLE_MARKET = {
     "enable_order_book": True,
     "tick_size": Decimal("0.01"),
     "neg_risk": False,
-    "end_date": "2026-05-31T23:59:59Z",
+    "end_date": "2027-06-30T23:59:59Z",
     "outcomes": ["Yes", "No"],
     "outcome_prices": [Decimal("0.48"), Decimal("0.52")],
     "clob_token_ids": ["0xTokenYes", "0xTokenNo"],

@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -25,7 +26,13 @@ from typing import Any
 
 import websockets
 
-from src.live.data_resilience import ResilientWebSocketClient, ConnectionHealth
+from src.config.optimization_settings import LOCAL_OPTIMIZATION_CONFIG, get_ws_library
+from src.live.auth import create_ws_auth_payload, get_address_from_private_key
+from src.live.data_resilience import (
+    FatalConnectionError,
+    ResilientWebSocketClient,
+    ConnectionHealth,
+)
 
 logger = logging.getLogger("ingesta")
 
@@ -37,6 +44,7 @@ SIZE_PRECISION = Decimal("0.01")
 BACKOFF_INITIAL = 1.0
 BACKOFF_MAX = 60.0
 BACKOFF_MULTIPLIER = 2.0
+CLOB_AUTH_TIMEOUT = 10
 
 
 @dataclass
@@ -120,10 +128,12 @@ class IngestaCLOB:
         market_snapshot: list[dict] | None = None,
         clob_api_base: str = "https://clob.polymarket.com",
         zombie_timeout_s: int = 60,
+        private_key: str | None = None,
+        chain_id: int = 137,
     ) -> None:
-        self.api_key = os.environ["POLYMARKET_API_KEY"]
-        self.secret = os.environ["POLYMARKET_SECRET"]
-        self.passphrase = os.environ["POLYMARKET_PASSPHRASE"]
+        raw_key = private_key or os.environ.get("PRIVATE_KEY", "")
+        self._private_key: str | None = raw_key if raw_key else None
+        self._chain_id = chain_id
         self.asset_ids = asset_ids or ["*"]
         self.queue: asyncio.Queue[NormalizedEvent] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
         self.market_state = MarketState(market_snapshot)
@@ -167,37 +177,83 @@ class IngestaCLOB:
     # ── helpers de red ──────────────────────────────────────────────
 
     async def _connect_and_auth(self) -> Any:
-        """Connect to WebSocket, authenticate, and subscribe.
+        """Connect to WebSocket, authenticate with L1 (wallet signature), and subscribe.
 
         This is used as the connect_factory for ResilientWebSocketClient.
+        The auth response is verified before subscribing.
         """
-        ws = await websockets.connect(
-            WS_URL,
-            ping_interval=None,
-            close_timeout=5,
-        )
-        await self._send_auth(ws)
+        ws_lib = get_ws_library()
+
+        if ws_lib == "picows":
+            try:
+                import picows
+                ws = await picows.connect(WS_URL)
+                logger.info("WebSocket connected via picows (Cython)")
+            except ImportError:
+                logger.warning("picows not installed — falling back to websockets")
+                ws = await websockets.connect(
+                    WS_URL,
+                    ping_interval=15,
+                    close_timeout=5,
+                )
+        else:
+            ws = await websockets.connect(
+                WS_URL,
+                ping_interval=15,
+                close_timeout=5,
+            )
+
+        if self._private_key:
+            auth_payload = create_ws_auth_payload(
+                self._private_key,
+                chain_id=self._chain_id,
+            )
+            await ws.send(json.dumps(auth_payload))
+            logger.info("L1 auth message sent: address=%s", auth_payload["address"])
+
+            auth_resp = await asyncio.wait_for(ws.recv(), timeout=CLOB_AUTH_TIMEOUT)
+            self._check_auth_response(auth_resp)
+        else:
+            logger.warning(
+                "No private key configured — connecting without authentication"
+            )
+
         await self._subscribe(ws)
         return ws
 
-    async def _send_auth(self, ws: Any) -> None:
-        msg = {
-            "type": "auth",
-            "apiKey": self.api_key,
-            "secret": self.secret,
-            "passphrase": self.passphrase,
-        }
-        await ws.send(json.dumps(msg))
-        logger.debug("mensaje de autenticación enviado")
+    def _check_auth_response(self, raw: str | bytes) -> None:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        stripped = raw.strip()
+        if not stripped:
+            raise FatalConnectionError("Auth: respuesta vacía del servidor")
+        if stripped == "INVALID OPERATION":
+            raise FatalConnectionError(
+                "Auth: server returned INVALID OPERATION"
+            )
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            raise FatalConnectionError(
+                f"Auth: respuesta no JSON: {stripped[:200]}"
+            )
+        if data.get("type") != "auth" or not data.get("success", False):
+            raise FatalConnectionError(
+                f"Auth: falló la autenticación: {stripped[:200]}"
+            )
+        logger.info("L1 WebSocket authentication successful")
 
     async def _subscribe(self, ws: Any) -> None:
         msg: dict[str, Any] = {
-            "assets_ids": self.asset_ids,
             "type": "market",
+            "assets_ids": self.asset_ids,
             "custom_feature_enabled": True,
         }
         await ws.send(json.dumps(msg))
-        logger.info("suscripción enviada: %d asset(s)", len(self.asset_ids))
+        logger.info(
+            "suscripción al canal market enviada: %d asset(s) custom_feature=%s",
+            len(self.asset_ids), True,
+        )
 
     async def _on_message(self, raw_message: str) -> None:
         """Callback for ResilientWebSocketClient message events."""
@@ -330,11 +386,18 @@ class IngestaCLOB:
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
 
+        if not raw or not raw.strip():
+            return []
+
         if raw.strip() == "PONG":
             logger.debug("PONG <-")
             return []
 
-        msg = json.loads(raw)
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Mensaje no JSON recibido: %s", raw[:100])
+            return []
         event_type = msg.get("event_type")
         if not event_type:
             logger.warning("mensaje sin event_type: %.200s", raw)
@@ -366,6 +429,21 @@ class IngestaCLOB:
     async def run(self) -> None:
         self._running = True
         logger.info("IngestaCLOB iniciado")
+
+        if not self._private_key:
+            logger.warning(
+                "PRIVATE_KEY no configurada — "
+                "ejecutando sin conexión WebSocket (modo offline / dry-run)"
+            )
+            try:
+                while self._running:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._running = False
+                logger.info("IngestaCLOB detenido (sin WebSocket)")
+            return
 
         # Create ResilientWebSocketClient
         self._resilient_ws = ResilientWebSocketClient(
@@ -421,7 +499,10 @@ async def main() -> None:
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
 
-    ingesta = IngestaCLOB()
+    ingesta = IngestaCLOB(
+        private_key=os.environ.get("PRIVATE_KEY"),
+        chain_id=int(os.environ.get("POLYGON_CHAIN_ID", "137")),
+    )
     try:
         await ingesta.run()
     except KeyboardInterrupt:

@@ -51,6 +51,14 @@ from src.live.position_manager import PositionManager
 from src.live.performance_tracker import PerformanceTracker
 from src.live.monitor import CronMonitor
 from src.live.alerting import AlertManager
+from src.execution.maker_policy import MakerPolicy
+from src.infrastructure.cache_manager import SignalCache, get_signal_cache_instance
+from src.infrastructure.latency_tracker import (
+    LatencyTracker,
+    get_latency_tracker,
+    measure_latency,
+)
+from src.config.optimization_settings import LOCAL_OPTIMIZATION_CONFIG
 
 logger = logging.getLogger("ejecucion")
 
@@ -296,6 +304,27 @@ class EjecutorOrdenes:
             on_critical_cb=self._on_critical_alert,
         )
 
+        # ── MakerPolicy (maker-first execution) ────────────────────────
+        self._maker_policy = MakerPolicy(
+            maker_timeout_s=15.0,
+            cross_spread_edge_threshold=Decimal("0.03"),
+            tick_size=Decimal("0.01"),
+            cancel_order_cb=self._cancel_order_cb,
+            place_limit_order_cb=self._place_limit_order,
+            place_market_order_cb=self._place_market_order,
+            get_order_status_cb=self._get_order_status,
+        )
+
+        # ── Signal cache for MakerPolicy callbacks ────────────────────
+        self._current_signal_cache: dict[str, Any] = {}
+
+        # ── Performance infrastructure ─────────────────────────────────
+        self._signal_cache = get_signal_cache_instance()
+        self._latency_tracker = get_latency_tracker()
+
+        # HTTP session pool optimizations
+        self._http_connector: aiohttp.TCPConnector | None = None
+
         # ── v2: AlertManager ────────────────────────────────────────────
         alert_cfg = LIVE_CONFIG.get("alerting", {})
         self._alert_manager = AlertManager(
@@ -305,6 +334,48 @@ class EjecutorOrdenes:
             alert_on_critical=alert_cfg.get("alert_on_critical", True),
             alert_on_warning=alert_cfg.get("alert_on_warning", False),
         )
+
+    # ── MakerPolicy Callbacks ─────────────────────────────────────────
+
+    async def _place_limit_order(self, order_data: dict[str, Any]) -> dict[str, Any]:
+        """Place a limit order (used by MakerPolicy).
+
+        In dry-run mode, returns a mock success immediately.
+        """
+        if self.dry_run:
+            return {"success": True, "order_id": "dry-run-limit"}
+        signal = self._current_signal_cache.get("signal", {})
+        typed_data = self._build_typed_data(order_data, EXCHANGE_V2)
+        signature = self._sign_order(typed_data)
+        payload_result = await self._send_order_raw(order_data, signature, signal)
+        if payload_result.get("success"):
+            return {"success": True, "order_id": payload_result.get("order_id", "")}
+        return payload_result
+
+    async def _place_market_order(self, order_data: dict[str, Any]) -> dict[str, Any]:
+        """Place a market order (for forced closes only, via MakerPolicy)."""
+        if self.dry_run:
+            return {"success": True, "order_id": "dry-run-market"}
+        signal = self._current_signal_cache.get("signal", {})
+        signal["order_type"] = "FOK"
+        typed_data = self._build_typed_data(order_data, EXCHANGE_V2)
+        signature = self._sign_order(typed_data)
+        return await self._send_order_raw(order_data, signature, signal)
+
+    async def _get_order_status(self, order_id: str) -> dict[str, Any] | None:
+        """Check if an order was filled (used by MakerPolicy poll loop)."""
+        if self.dry_run:
+            return {"status": "FILLED"} if order_id == "dry-run-limit" else None
+        try:
+            session = await self._get_session()
+            headers = self._build_l2_headers("GET", f"/orders/{order_id}")
+            async with session.get(f"/orders/{order_id}", headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data
+        except Exception:
+            logger.exception("Error fetching order status for %s", order_id)
+        return None
 
     # ── v2: Callbacks for new modules ──────────────────────────────────
 
@@ -357,9 +428,25 @@ class EjecutorOrdenes:
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=float(RISK_CFG["op_timeout_s"]))
+            http_cfg = LOCAL_OPTIMIZATION_CONFIG.get("http", {})
+            self._http_connector = aiohttp.TCPConnector(
+                limit=http_cfg.get("max_connections", 50),
+                limit_per_host=http_cfg.get("max_per_host", 20),
+                ttl_dns_cache=http_cfg.get("dns_cache_ttl", 300),
+                use_dns_cache=True,
+                force_close=False,  # Keep-alive
+                enable_cleanup_closed=True,
+            )
             self._session = aiohttp.ClientSession(
                 base_url=CLOB_API_BASE,
                 timeout=timeout,
+                connector=self._http_connector,
+            )
+            logger.info(
+                "HTTP session: limit=%d per_host=%d dns_cache=%ds",
+                http_cfg.get("max_connections", 50),
+                http_cfg.get("max_per_host", 20),
+                http_cfg.get("dns_cache_ttl", 300),
             )
         return self._session
 
@@ -374,8 +461,13 @@ class EjecutorOrdenes:
     ) -> dict[str, str]:
         timestamp = str(int(time.time()))
         message = f"{timestamp}{method}{path}{body}"
+        secret_raw = self._api_secret.rstrip("=")
+        pad = 4 - (len(secret_raw) % 4)
+        if pad == 4:
+            pad = 0
+        secret_padded = secret_raw + "=" * pad
         sig = hmac.new(
-            base64.b64decode(self._api_secret),
+            base64.urlsafe_b64decode(secret_padded),
             message.encode("utf-8"),
             hashlib.sha256,
         ).digest()
@@ -660,6 +752,11 @@ class EjecutorOrdenes:
         side_str = "BUY" if order_data["side"] == 0 else "SELL"
         owner = signal.get("owner", self._wallet_address)
 
+        # Calculate fee rate (Polymarket 2026 dynamic fee)
+        probability = Decimal(str(signal.get("probability", "0.5")))
+        fee_rate = dynamic_taker_fee(probability)
+        fee_rate_bps = int(fee_rate * Decimal("10000"))  # Convert to basis points
+
         payload = {
             "order": {
                 "salt": str(order_data["salt"]),
@@ -675,6 +772,7 @@ class EjecutorOrdenes:
                 "metadata": order_data["metadata"],
                 "builder": order_data["builder"],
                 "signature": signature,
+                "feeRateBps": fee_rate_bps,
             },
             "owner": owner,
             "orderType": signal.get("order_type", "GTC"),
@@ -824,27 +922,94 @@ class EjecutorOrdenes:
                 proposed_cost,
             )
 
-        # 6. Place via OrderLifecycleManager (timeout-safe)
-        op_result = await self._order_lifecycle.execute_trading_cycle(
-            signal, order_data, signature,
+        # 6. Maker-first placement via MakerPolicy
+        # Cache the signal for callbacks (MakerPolicy polls order status)
+        self._current_signal_cache["signal"] = signal
+
+        # Get best bid/ask for maker price computation
+        # In a full implementation, these come from the order book.
+        # For now, use signal price ± spread estimate.
+        probability = Decimal(str(signal.get("probability", "0.5")))
+        spread_est = Decimal("0.02")  # 2 tick estimated spread
+        best_bid = (price - spread_est).quantize(DECIMAL_ONE_HUNDREDTH, rounding=ROUND_DOWN)
+        best_ask = (price + spread_est).quantize(DECIMAL_ONE_HUNDREDTH, rounding=ROUND_DOWN)
+        best_bid = max(DECIMAL_ONE_HUNDREDTH, best_bid)
+        best_ask = min(Decimal("0.99"), best_ask)
+
+        # Try maker-first
+        maker_result = await self._maker_policy.execute_maker_order(
+            order_data=order_data,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            tick_size=DECIMAL_ONE_HUNDREDTH,
         )
+
+        if maker_result.get("status") == "filled":
+            # Maker order filled — great!
+            op_success = True
+            op_order_id = maker_result.get("order_id", "")
+            op_error = ""
+            op_latency = maker_result.get("latency_ms", 0)
+        elif maker_result.get("status") in ("timed_out", "placement_failed"):
+            # Maker order timed out — check if we should cross spread
+            edge = Decimal(str(signal.get("ev", "0")))
+            spread_pct = spread_est * Decimal("100")  # Convert to percentage
+
+            should_cross, cross_reason = self._maker_policy.should_cross_spread(
+                edge=edge,
+                probability=probability,
+                spread_pct=spread_pct,
+            )
+
+            if should_cross or bypass_filters:
+                # Cross the spread (take liquidity) — edge justifies it
+                logger.info("Maker timed out — crossing spread: %s", cross_reason)
+                if bypass_filters:
+                    # Force close — use market order via MakerPolicy
+                    close_result = await self._maker_policy.execute_forced_close(order_data)
+                    op_success = close_result.get("success", False)
+                    op_order_id = close_result.get("order_id", "")
+                    op_error = close_result.get("error", "")
+                    op_latency = 0
+                else:
+                    # Place via OrderLifecycleManager as taker
+                    op_result = await self._order_lifecycle.execute_trading_cycle(
+                        signal, order_data, signature,
+                    )
+                    op_success = op_result.success
+                    op_order_id = op_result.order_id
+                    op_error = op_result.error
+                    op_latency = op_result.latency_ms
+            else:
+                # Edge doesn't justify crossing — skip
+                logger.info("Maker timed out — not crossing spread: %s", cross_reason)
+                op_success = False
+                op_order_id = ""
+                op_error = f"maker_timeout_no_cross: {cross_reason}"
+                op_latency = maker_result.get("latency_ms", 0)
+
+                # Untrack pending buy
+                if side in ("BUY_YES", "BUY_NO"):
+                    self._circuit_breaker.untrack_pending_buy(
+                        order_data.get("salt", str(time.time())),
+                    )
+        else:
+            op_success = False
+            op_order_id = ""
+            op_error = maker_result.get("error", "maker_placement_failed")
+            op_latency = maker_result.get("latency_ms", 0)
 
         # Track for circuit breakers
         self._order_timestamps.append(time.time())
-        self._order_results.append(op_result.success)
-        await self._circuit_breaker.record_order(filled=op_result.success)
+        self._order_results.append(op_success)
+        await self._circuit_breaker.record_order(filled=op_success)
 
-        if not op_result.success:
+        if not op_success:
             self._circuit_breaker.record_failure()
-            self._last_error = op_result.error
-            # Untrack pending buy on failure
-            if side in ("BUY_YES", "BUY_NO"):
-                self._circuit_breaker.untrack_pending_buy(
-                    order_data.get("salt", str(time.time())),
-                )
+            self._last_error = op_error
 
         # Update PnL tracking
-        if op_result.success and not self.dry_run:
+        if op_success and not self.dry_run:
             if side in ("BUY_YES", "BUY_NO"):
                 self._daily_pnl -= proposed_cost
                 await self._circuit_breaker.record_pnl(-proposed_cost)
@@ -863,9 +1028,8 @@ class EjecutorOrdenes:
             self._last_trade_time = time.time()
 
         # Handle result
-        if op_result.success:
-            oid = op_result.order_id
-            self._open_orders[oid] = {
+        if op_success:
+            self._open_orders[op_order_id] = {
                 "asset_id": asset_id,
                 "side": side,
                 "price": str(price),
@@ -875,18 +1039,18 @@ class EjecutorOrdenes:
             logger.info(
                 "orden OK: asset=%s side=%s price=%s size=%s id=%s latency=%.0fms",
                 asset_id, side, str(price), str(size),
-                oid, op_result.latency_ms,
+                op_order_id, op_latency,
             )
         else:
             logger.error(
                 "orden FALLÓ: asset=%s side=%s error=%s",
-                asset_id, side, op_result.error,
+                asset_id, side, op_error,
             )
 
         result = {
-            "success": op_result.success,
-            "order_id": op_result.order_id,
-            "error": op_result.error,
+            "success": op_success,
+            "order_id": op_order_id,
+            "error": op_error,
         }
         await self._log_execution(signal, result)
 
@@ -896,10 +1060,10 @@ class EjecutorOrdenes:
             "side": side,
             "price": str(price),
             "size": str(size),
-            "order_id": op_result.order_id,
-            "success": op_result.success,
-            "error": op_result.error,
-            "latency_ms": round(op_result.latency_ms, 2),
+            "order_id": op_order_id,
+            "success": op_success,
+            "error": op_error,
+            "latency_ms": round(op_latency, 2),
         })
 
     async def _process_signal(self, signal: dict) -> None:

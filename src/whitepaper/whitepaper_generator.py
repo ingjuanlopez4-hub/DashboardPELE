@@ -965,7 +965,7 @@ class WhitepaperGenerator:
             if cat not in cat_data:
                 cat_data[cat] = {"count": 0, "score": 0.0, "spread": 0.0, "vol": 0.0}
             cat_data[cat]["count"] += 1
-            cat_data[cat]["score"] += m.liquidity_score
+            cat_data[cat]["score"] += float(m.liquidity_score)
             snap = next(iter(m.snapshots.values())) if m.snapshots else None
             if snap:
                 cat_data[cat]["spread"] += float(snap.spread_pct)
@@ -987,7 +987,12 @@ class WhitepaperGenerator:
 
     @staticmethod
     def _chart_div(div_id: str, plotly_config: dict) -> str:
-        config_json = json.dumps(plotly_config)
+        class DecimalEncoder(json.JSONEncoder):
+            def default(self, obj: Any) -> Any:
+                if isinstance(obj, Decimal):
+                    return float(obj)
+                return super().default(obj)
+        config_json = json.dumps(plotly_config, cls=DecimalEncoder)
         return (
             f'<div id="{div_id}"></div>\n'
             f'<script>\n'

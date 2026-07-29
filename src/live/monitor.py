@@ -79,6 +79,19 @@ class CronMonitor:
         self._last_discrepancy_time: float = 0.0
         self._reconciliation_issues: list[str] = []
 
+        # ── Per-source signal metrics (v3) ─────────────────────────────
+        # {source_name: {trades, wins, total_pnl, max_drawdown, returns}}
+        self._signal_metrics: dict[str, dict[str, Any]] = {
+            "wick": {"trades": 0, "wins": 0, "losses": 0, "pnl": Decimal("0"),
+                     "max_drawdown": Decimal("0"), "returns": [], "peak_pnl": Decimal("0")},
+            "external": {"trades": 0, "wins": 0, "losses": 0, "pnl": Decimal("0"),
+                         "max_drawdown": Decimal("0"), "returns": [], "peak_pnl": Decimal("0")},
+            "finbert": {"trades": 0, "wins": 0, "losses": 0, "pnl": Decimal("0"),
+                        "max_drawdown": Decimal("0"), "returns": [], "peak_pnl": Decimal("0")},
+            "montecarlo": {"trades": 0, "wins": 0, "losses": 0, "pnl": Decimal("0"),
+                           "max_drawdown": Decimal("0"), "returns": [], "peak_pnl": Decimal("0")},
+        }
+
     async def _ensure_db(self) -> aiosqlite.Connection:
         if self._db is None:
             self._db = await aiosqlite.connect(self._db_path)
@@ -235,6 +248,84 @@ class CronMonitor:
             self._db = None
         logger.info("CronMonitor stopped")
 
+    # ── v3: Per-source signal metrics ─────────────────────────────────
+
+    def record_signal_trade(
+        self,
+        source: str,
+        pnl: Decimal,
+    ) -> None:
+        """Record a trade result for a signal source.
+
+        Parameters
+        ----------
+        source : str
+            Signal source name: "wick", "external", "finbert", "montecarlo".
+        pnl : Decimal
+            Profit/loss from this trade (positive = win, negative = loss).
+        """
+        metrics = self._signal_metrics.get(source)
+        if metrics is None:
+            return
+
+        metrics["trades"] += 1
+        if pnl > 0:
+            metrics["wins"] += 1
+        elif pnl < 0:
+            metrics["losses"] += 1
+
+        metrics["pnl"] += pnl
+        metrics["returns"].append(pnl)
+        # Keep only last 1000 returns for performance
+        if len(metrics["returns"]) > 1000:
+            metrics["returns"] = metrics["returns"][-1000:]
+
+        # Track drawdown
+        if metrics["pnl"] > metrics["peak_pnl"]:
+            metrics["peak_pnl"] = metrics["pnl"]
+        drawdown = metrics["peak_pnl"] - metrics["pnl"]
+        if drawdown > metrics["max_drawdown"]:
+            metrics["max_drawdown"] = drawdown
+
+    def get_signal_metrics(self) -> dict[str, dict[str, Any]]:
+        """Get current per-source signal metrics with computed ratios.
+
+        Returns
+        -------
+        dict with source -> {win_rate, sharpe_ratio, total_pnl, trades, max_drawdown}
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for source, metrics in self._signal_metrics.items():
+            trades = metrics["trades"]
+            wins = metrics["wins"]
+            losses = metrics["losses"]
+            total_pnl = metrics["pnl"]
+            max_dd = metrics["max_drawdown"]
+
+            win_rate = Decimal(str(wins / trades)).quantize(Decimal("0.01")) if trades > 0 else Decimal("0")
+
+            # Sharpe ratio approximation: mean(pnl) / std(pnl) * sqrt(trades)
+            sharpe = Decimal("0")
+            if len(metrics["returns"]) >= 10:
+                returns = [float(r) for r in metrics["returns"] if r != 0]
+                if returns:
+                    import statistics
+                    mean_r = statistics.mean(returns)
+                    std_r = statistics.stdev(returns) if len(returns) > 1 else 1.0
+                    if std_r > 0:
+                        sharpe = Decimal(str(round(mean_r / std_r * (trades ** 0.5), 4)))
+
+            result[source] = {
+                "trades": trades,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": str(win_rate),
+                "total_pnl": str(total_pnl),
+                "sharpe_ratio": str(sharpe),
+                "max_drawdown": str(max_dd),
+            }
+        return result
+
     def get_health_dict(self) -> dict[str, Any]:
         """Return comprehensive health status for the /health endpoint."""
         return {
@@ -251,7 +342,8 @@ class CronMonitor:
                     self._last_discrepancy_time, tz=timezone.utc
                 ).isoformat() if self._last_discrepancy_time > 0 else "never",
                 "reconciliation_issues": self._reconciliation_issues[-5:],
-            }
+            },
+            "signal_metrics": self.get_signal_metrics(),
         }
 
     def build_health_response(
@@ -285,7 +377,11 @@ class CronMonitor:
         else:
             overall_status = "OK"
 
+        # Include per-source signal metrics in health response
+        signal_metrics = self.get_signal_metrics()
+
         response: dict[str, Any] = {
+            "signal_metrics": signal_metrics,
             "status": overall_status,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "dry_run": extra.get("dry_run", True) if extra else True,

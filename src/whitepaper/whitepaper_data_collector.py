@@ -72,7 +72,12 @@ class WhitepaperDataCollector:
         try:
             try:
                 t0 = asyncio.get_event_loop().time()
-                discovery = MarketDiscoveryManager(self._db)
+                discovery = MarketDiscoveryManager(
+                    self._db,
+                    api_key=os.environ.get("POLYMARKET_API_KEY"),
+                    api_secret=os.environ.get("POLYMARKET_SECRET"),
+                    api_passphrase=os.environ.get("POLYMARKET_PASSPHRASE"),
+                )
                 markets = await discovery.discover_all_active_markets()
                 results.markets_discovered = len(markets)
                 timing["discovery"] = asyncio.get_event_loop().time() - t0
@@ -168,6 +173,7 @@ class WhitepaperDataCollector:
                     equity_curve=backtest_result.equity_curve,
                     markets=selected,
                     backtest_results=backtest_result,
+                    db=self._db,
                 )
                 results.robustness = robustness_results
                 timing["robustness"] = asyncio.get_event_loop().time() - t0

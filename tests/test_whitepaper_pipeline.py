@@ -74,7 +74,7 @@ def sample_market() -> MarketInfo:
         volume_num=Decimal("1500000.50"),
         liquidity_num=Decimal("250000.75"),
         tick_size=Decimal("0.01"),
-        end_date="2026-05-31T23:59:59Z",
+        end_date="2027-06-30T23:59:59Z",
         active=True,
         closed=False,
     )
@@ -297,6 +297,58 @@ async def test_insert_orderbook_snapshot(db: PolymarketDatabase, sample_market: 
 
 
 @pytest.mark.asyncio
+async def test_token_price_history_is_filtered_limited_and_chronological(
+    db: PolymarketDatabase,
+    sample_market: MarketInfo,
+    sample_snapshot: OrderBookSnapshot,
+) -> None:
+    await db.upsert_market(sample_market)
+    for price in ("0.40", "0.45", "0.50"):
+        await db.insert_orderbook_snapshot(
+            OrderBookSnapshot(
+                market_id=sample_market.id,
+                token_id="0xtokenYes",
+                mid_price=Decimal(price),
+            )
+        )
+    await db.insert_orderbook_snapshot(
+        OrderBookSnapshot(
+            market_id=sample_market.id,
+            token_id="0xtokenNo",
+            mid_price=Decimal("0.55"),
+        )
+    )
+    await db._conn.execute(
+        """
+        UPDATE orderbook_snapshots
+        SET snapshot_time = CASE mid_price
+            WHEN '0.40' THEN '2026-01-01T00:00:00+00:00'
+            WHEN '0.45' THEN '2026-01-02T00:00:00+00:00'
+            WHEN '0.50' THEN '2026-01-03T00:00:00+00:00'
+            ELSE snapshot_time
+        END
+        WHERE token_id = '0xtokenYes'
+        """
+    )
+    await db._conn.commit()
+
+    history = await db.get_token_price_history("0xtokenYes", limit=2)
+
+    assert [Decimal(row["mid_price"]) for row in history] == [
+        Decimal("0.45"),
+        Decimal("0.50"),
+    ]
+    assert all(row["token_id"] == "0xtokenYes" for row in history)
+
+    dated = await db.get_token_price_history(
+        "0xtokenYes",
+        start_date="2026-01-02T00:00:00+00:00",
+        end_date="2026-01-02T23:59:59+00:00",
+    )
+    assert [Decimal(row["mid_price"]) for row in dated] == [Decimal("0.45")]
+
+
+@pytest.mark.asyncio
 async def test_insert_trade(db: PolymarketDatabase, sample_market: MarketInfo) -> None:
     await db.upsert_market(sample_market)
     trade = TradeRecord(
@@ -503,7 +555,11 @@ class TestStrategyBacktestRunner:
         runner._params = DEFAULT_PARAMS
         runner._rng = __import__("random").Random(42)
 
-        result = runner._monte_carlo_signal(Decimal("0.50"), sample_tracked_market)
+        result = runner._monte_carlo_signal(
+            current_price=Decimal("0.50"),
+            initial_mid_price=Decimal("0.50"),
+            tm=sample_tracked_market,
+        )
         assert "ev" in result
         assert "probability" in result
         assert "n_simulations" in result
@@ -524,6 +580,46 @@ class TestStrategyBacktestRunner:
             assert result.total_trades >= 0
             if result.total_trades > 0:
                 assert result.win_rate >= 0
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_backtest_replays_persisted_history(
+        self, sample_tracked_market: TrackedMarket
+    ) -> None:
+        db = await PolymarketDatabase.create(":memory:")
+        try:
+            await db.upsert_market(sample_tracked_market.market)
+            for price in ("0.40", "0.50", "0.60"):
+                await db.insert_orderbook_snapshot(
+                    OrderBookSnapshot(
+                        market_id=sample_tracked_market.market.id,
+                        token_id="0xtokenYes",
+                        mid_price=Decimal(price),
+                    )
+                )
+
+            runner = StrategyBacktestRunner(db)
+            runner._generate_signal = MagicMock(return_value={
+                "side": "BUY_YES",
+                "ev": Decimal("0.10"),
+                "probability": Decimal("0.90"),
+                "win_rate": 90,
+                "signal_source": "test",
+            })
+            result = await runner.run_backtest([sample_tracked_market])
+
+            assert result.data_source == "historical"
+            assert result.historical_points == 3
+            assert result.total_trades == 2
+            assert result.net_pnl > 0
+            assert runner._generate_signal.call_count == 2
+            assert runner._generate_signal.call_args_list[-1].kwargs[
+                "price_history"
+            ] == [Decimal("0.40"), Decimal("0.40")]
+
+            stored = await db.get_all_trades()
+            assert len(stored) == 2
         finally:
             await db.close()
 

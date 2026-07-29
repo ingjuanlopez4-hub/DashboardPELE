@@ -1,12 +1,17 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
 import math
+import os
 import random
 import time
 from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Any, Optional
 
 import aiohttp
+from eth_account import Account
 
 from src.data.database import (
     MarketInfo,
@@ -50,6 +55,10 @@ class MarketDiscoveryManager:
         gamma_api_base: str = GAMMA_API_BASE,
         clob_api_base: str = CLOB_API_BASE,
         weights: Optional[dict[str, Decimal]] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        api_passphrase: Optional[str] = None,
+        wallet_address: Optional[str] = None,
     ) -> None:
         self._db = db
         self._gamma_base = gamma_api_base
@@ -57,6 +66,18 @@ class MarketDiscoveryManager:
         self._weights = weights or DEFAULT_LIQUIDITY_WEIGHTS
         self._session: Optional[aiohttp.ClientSession] = None
         self._discovered_markets: dict[str, MarketInfo] = {}
+        self._api_key = api_key or os.environ.get("POLYMARKET_API_KEY", "")
+        self._api_secret = api_secret or os.environ.get("POLYMARKET_SECRET", "")
+        self._api_passphrase = api_passphrase or os.environ.get("POLYMARKET_PASSPHRASE", "")
+        self._wallet_address = wallet_address or os.environ.get("POLYMARKET_ADDRESS", "")
+        if not self._wallet_address:
+            pk = os.environ.get("PRIVATE_KEY", "")
+            if pk:
+                try:
+                    clean_pk = pk[2:] if pk.startswith("0x") else pk
+                    self._wallet_address = Account.from_key(clean_pk).address
+                except Exception:
+                    pass
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -64,6 +85,31 @@ class MarketDiscoveryManager:
                 headers={"User-Agent": "PolymarketBot/1.0"}
             )
         return self._session
+
+    def _build_l2_headers(
+        self, method: str, path: str, body: str = ""
+    ) -> dict[str, str]:
+        if not self._api_key or not self._api_secret:
+            return {}
+        timestamp = str(int(time.time()))
+        message = f"{timestamp}{method}{path}{body}"
+        secret_raw = self._api_secret.rstrip("=")
+        pad = 4 - (len(secret_raw) % 4)
+        if pad == 4:
+            pad = 0
+        secret_padded = secret_raw + "=" * pad
+        sig = hmac.new(
+            base64.urlsafe_b64decode(secret_padded),
+            message.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        return {
+            "POLY_ADDRESS": self._wallet_address,
+            "POLY_SIGNATURE": base64.b64encode(sig).decode(),
+            "POLY_TIMESTAMP": timestamp,
+            "POLY_API_KEY": self._api_key,
+            "POLY_PASSPHRASE": self._api_passphrase,
+        }
 
     async def close(self) -> None:
         if self._session and not self._session.closed:
@@ -182,7 +228,15 @@ class MarketDiscoveryManager:
         url = f"{self._clob_base}/book"
         params = {"token_id": token_id}
         try:
-            data = await self._fetch_json(url, CLOB_SEMAPHORE, params=params)
+            async with CLOB_SEMAPHORE:
+                session = await self._get_session()
+                headers = self._build_l2_headers("GET", f"/book?token_id={token_id}")
+                async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 429:
+                        logger.warning("Rate limited on CLOB /book for token %s", token_id)
+                        return OrderBookSnapshot(market_id=market_id, token_id=token_id)
+                    resp.raise_for_status()
+                    data = await resp.json()
         except Exception as exc:
             logger.warning("Failed to fetch order book for token %s: %s", token_id, exc)
             return OrderBookSnapshot(market_id=market_id, token_id=token_id)

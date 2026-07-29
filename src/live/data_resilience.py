@@ -8,9 +8,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from src.infrastructure.cache_manager import TwoLevelCache, get_price_cache_instance
+
 import aiohttp
 
 logger = logging.getLogger("data_resilience")
+
+
+class FatalConnectionError(Exception):
+    """Error fatal de conexión que no debe reintentarse sin intervención manual."""
+
 
 ZOMBIE_TIMEOUT_S = 60
 SNAPSHOT_TIMEOUT_S = 10
@@ -164,6 +171,10 @@ class ResilientWebSocketClient:
         self._on_disconnect_cb: Callable[[], Any] | None = None
         self._on_reconnect_cb: Callable[[], Any] | None = None
 
+        # Performance cache for order book data
+        self._book_cache: TwoLevelCache | None = None
+        self._price_cache = get_price_cache_instance()
+
         self._backoff = 1.0
         self._backoff_max = 60.0
         self._backoff_mult = 2.0
@@ -173,6 +184,8 @@ class ResilientWebSocketClient:
 
     def set_token_ids(self, token_ids: list[str]) -> None:
         self._active_token_ids = token_ids
+        # Initialize L2 cache for book snapshots
+        self._book_cache = TwoLevelCache() if token_ids else None
 
     def set_disconnect_callback(self, cb: Callable[[], Any]) -> None:
         self._on_disconnect_cb = cb
@@ -287,18 +300,43 @@ class ResilientWebSocketClient:
                     self._health.connected = True
                     self._health.last_message_at = time.time()
 
+                    raw = message.strip() if isinstance(message, str) else message
+
+                    if raw == "INVALID OPERATION":
+                        logger.critical(
+                            "Fatal: server returned 'INVALID OPERATION' — "
+                            "verify credentials and subscribe format"
+                        )
+                        raise FatalConnectionError("INVALID OPERATION from server")
+
                     try:
                         msg_data = json.loads(message)
                         event_hash = msg_data.get("hash")
                         if event_hash and self._dedup.is_duplicate(event_hash):
                             logger.debug("Dedup: skipped event %s", event_hash)
                             continue
+
+                        # Cache price data for fast access
+                        if msg_data.get("event_type") in ("price_change", "last_trade_price"):
+                            for pc in msg_data.get("price_changes", [msg_data]):
+                                asset_id = pc.get("asset_id") or msg_data.get("asset_id", "")
+                                price = pc.get("price") or msg_data.get("price", "")
+                                if asset_id and price:
+                                    self._price_cache.set(asset_id, price)
                     except (json.JSONDecodeError, TypeError):
                         pass
 
                     if self._message_cb:
-                        await self._message_cb(message)
+                        try:
+                            await self._message_cb(message)
+                        except json.JSONDecodeError:
+                            logger.debug("Ignored non-JSON message: %s", message[:100])
+                        except Exception:
+                            logger.exception("Unexpected error in message callback")
 
+            except FatalConnectionError:
+                logger.critical("ResilientWS: fatal error — stopping reconnection loop")
+                self._running = False
             except asyncio.CancelledError:
                 logger.info("ResilientWS: listener cancelled")
                 self._running = False

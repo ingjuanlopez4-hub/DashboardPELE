@@ -43,6 +43,10 @@ class BlockReason(Enum):
     EXPOSURE_TOTAL = "exposure_total_exceeded"
     FAILURE_COOLDOWN = "failure_cooldown_active"
     MANUAL = "manual_block"
+    STOP_LOSS_POSITION = "stop_loss_per_position"
+    LIQUIDITY_FILTER = "liquidity_below_minimum"
+    CORRELATED_EXPOSURE = "correlated_exposure_exceeded"
+    TRAILING_PROFIT_LOCK = "trailing_profit_lock_triggered"
 
 
 @dataclass
@@ -77,6 +81,7 @@ class CircuitBreakerManager:
         cancel_all_cb: Callable | None = None,
         fetch_open_orders_cb: Callable | None = None,
         cancel_order_cb: Callable | None = None,
+        place_market_order_cb: Callable | None = None,
         reserve_pct: Decimal = RESERVE_PCT_DEFAULT,
         max_drawdown_pct: Decimal = DRAWDOWN_MAX_DEFAULT,
         max_daily_loss_pct: Decimal = DAILY_LOSS_MAX_DEFAULT,
@@ -86,6 +91,11 @@ class CircuitBreakerManager:
         failure_window_seconds: int = 1800,
         max_consecutive_failures: int = 5,
         cooldown_seconds: int = 3600,
+        stop_loss_per_position_pct: Decimal | None = None,
+        min_liquidity_usd: Decimal | None = None,
+        correlated_exposure_max_pct: Decimal | None = None,
+        trailing_profit_gain_pct: Decimal | None = None,
+        trailing_profit_retrace_pct: Decimal | None = None,
     ) -> None:
         self._db_path = db_path
         self._balance_provider = balance_provider
@@ -93,6 +103,7 @@ class CircuitBreakerManager:
         self._cancel_all_cb = cancel_all_cb
         self._fetch_open_orders_cb = fetch_open_orders_cb
         self._cancel_order_cb = cancel_order_cb
+        self._place_market_order_cb = place_market_order_cb
         self._reserve_pct = reserve_pct
         self._max_drawdown_pct = max_drawdown_pct
         self._max_daily_loss_pct = max_daily_loss_pct
@@ -104,6 +115,13 @@ class CircuitBreakerManager:
         self._max_consecutive_failures = max_consecutive_failures
         self._cooldown_seconds = cooldown_seconds
 
+        # ── v3 reinforced limits ──
+        self._stop_loss_pct = stop_loss_per_position_pct or Decimal("20.0")
+        self._min_liquidity = min_liquidity_usd or Decimal("5000")
+        self._correlated_exposure_max_pct = correlated_exposure_max_pct or Decimal("25.0")
+        self._trailing_gain_pct = trailing_profit_gain_pct or Decimal("15.0")
+        self._trailing_retrace_pct = trailing_profit_retrace_pct or Decimal("10.0")
+
         self._state = CircuitBreakerState()
         self._status = BotStatus.HEALTHY
         self._db: aiosqlite.Connection | None = None
@@ -112,6 +130,14 @@ class CircuitBreakerManager:
         self._cooldown_until: float = 0.0
 
         self._pending_buy_costs: dict[str, Decimal] = {}
+
+        # Track positions for stop-loss and trailing profit lock
+        # position_id -> {entry_price, size, side, highest_price, unrealized_pnl_pct}
+        self._positions: dict[str, dict[str, Any]] = {}
+        # Track correlated groups: group_name -> set of asset_ids
+        self._correlated_groups: dict[str, set[str]] = {}
+        # Liquidity snapshot: asset_id -> depth_usd
+        self._liquidity_cache: dict[str, Decimal] = {}
 
     async def _ensure_db(self) -> aiosqlite.Connection:
         if self._db is None:
@@ -665,6 +691,218 @@ class CircuitBreakerManager:
             await self._db.close()
             self._db = None
         logger.info("CircuitBreakerManager stopped")
+
+    # ── v3: Stop-loss per position ──────────────────────────────────────
+
+    def register_position(
+        self,
+        position_id: str,
+        entry_price: Decimal,
+        size: Decimal,
+        side: str,
+        correlated_group: str | None = None,
+    ) -> None:
+        """Register a position for stop-loss and trailing-profit monitoring.
+
+        Parameters
+        ----------
+        position_id : str
+            Unique position identifier (usually asset_id).
+        entry_price : Decimal
+            Entry price of the position.
+        size : Decimal
+            Position size in USDC.
+        side : str
+            "BUY_YES", "BUY_NO", "SELL_YES", or "SELL_NO".
+        correlated_group : str | None
+            Optional group name for correlated exposure tracking.
+        """
+        self._positions[position_id] = {
+            "entry_price": entry_price,
+            "size": size,
+            "side": side,
+            "highest_price": entry_price if side in ("BUY_YES", "SELL_NO") else Decimal("1") - entry_price,
+            "highest_bid": entry_price,
+            "unrealized_pnl_pct": Decimal("0"),
+        }
+
+        if correlated_group:
+            if correlated_group not in self._correlated_groups:
+                self._correlated_groups[correlated_group] = set()
+            self._correlated_groups[correlated_group].add(position_id)
+
+    def unregister_position(self, position_id: str) -> None:
+        """Remove a position from monitoring."""
+        self._positions.pop(position_id, None)
+        for group in self._correlated_groups.values():
+            group.discard(position_id)
+
+    def update_position_price(self, position_id: str, current_price: Decimal) -> dict[str, Any] | None:
+        """Update a position's current market price and check for stop-loss/trailing-profit.
+
+        Parameters
+        ----------
+        position_id : str
+            Position to update.
+        current_price : Decimal
+            Current market price for the asset.
+
+        Returns
+        -------
+        dict with action if triggered ("stop_loss" or "trailing_profit"), else None.
+        """
+        pos = self._positions.get(position_id)
+        if pos is None:
+            return None
+
+        side = pos["side"]
+        entry = pos["entry_price"]
+
+        # Calculate unrealized PnL based on position side
+        if side in ("BUY_YES", "SELL_NO"):
+            # Profit when price goes up
+            if entry > 0:
+                pnl_pct = ((current_price - entry) / entry) * Decimal("100")
+            else:
+                pnl_pct = Decimal("0")
+            if current_price > pos["highest_price"]:
+                pos["highest_price"] = current_price
+        else:
+            # Profit when price goes down
+            if entry > 0:
+                pnl_pct = ((entry - current_price) / entry) * Decimal("100")
+            else:
+                pnl_pct = Decimal("0")
+            if (Decimal("1") - current_price) > pos["highest_price"]:
+                pos["highest_price"] = Decimal("1") - current_price
+
+        pos["unrealized_pnl_pct"] = pnl_pct
+
+        # Check stop-loss: exit if unrealized loss exceeds threshold
+        if pnl_pct <= -self._stop_loss_pct:
+            logger.critical(
+                "STOP-LOSS TRIGGERED: position=%s pnl=%.1f%% threshold=%.1f%%",
+                position_id, float(pnl_pct), float(self._stop_loss_pct),
+            )
+            return {"action": "stop_loss", "pnl_pct": pnl_pct, "position_id": position_id}
+
+        # Check trailing profit lock: if gain exceeded gain_pct and retraced retrace_pct
+        highest = pos["highest_price"]
+        if side in ("BUY_YES", "SELL_NO"):
+            current_gain = ((current_price - entry) / entry) * Decimal("100") if entry > 0 else Decimal("0")
+            retrace_from_peak = ((highest - current_price) / highest) * Decimal("100") if highest > 0 else Decimal("0")
+        else:
+            inv_entry = Decimal("1") - entry
+            inv_current = Decimal("1") - current_price
+            current_gain = ((inv_current - inv_entry) / inv_entry) * Decimal("100") if inv_entry > 0 else Decimal("0")
+            retrace_from_peak = ((highest - inv_current) / highest) * Decimal("100") if highest > 0 else Decimal("0")
+
+        if current_gain >= self._trailing_gain_pct and retrace_from_peak >= self._trailing_retrace_pct:
+            logger.critical(
+                "TRAILING PROFIT LOCK TRIGGERED: position=%s gain=%.1f%% retrace=%.1f%%",
+                position_id, float(current_gain), float(retrace_from_peak),
+            )
+            return {"action": "trailing_profit", "gain_pct": current_gain, "position_id": position_id}
+
+        return None
+
+    # ── v3: Liquidity filter ───────────────────────────────────────────
+
+    def update_liquidity(self, asset_id: str, depth_usd: Decimal) -> None:
+        """Update cached liquidity for an asset."""
+        self._liquidity_cache[asset_id] = depth_usd
+
+    async def check_liquidity(self, asset_id: str) -> str | None:
+        """Check if an asset has sufficient liquidity to trade.
+
+        Returns None if OK, or error string if below minimum.
+        """
+        depth = self._liquidity_cache.get(asset_id)
+        if depth is None:
+            return None  # No data yet — skip check
+        if depth < self._min_liquidity:
+            return (
+                f"liquidity_below_minimum: {depth} < {self._min_liquidity} "
+                f"for asset {asset_id}"
+            )
+        return None
+
+    # ── v3: Correlated exposure ─────────────────────────────────────────
+
+    async def check_correlated_exposure(
+        self,
+        asset_id: str,
+        proposed_cost: Decimal,
+    ) -> str | None:
+        """Check if proposed trade would exceed correlated exposure limit.
+
+        Total exposure across all assets in the same correlated group must
+        not exceed `correlated_exposure_max_pct` of balance.
+
+        Parameters
+        ----------
+        asset_id : str
+            Asset to trade.
+        proposed_cost : Decimal
+            Proposed additional cost.
+
+        Returns
+        -------
+        None if OK, error string if limit exceeded.
+        """
+        balance = await self._get_balance()
+        if balance <= 0:
+            return None
+
+        # Find which correlated group this asset belongs to
+        group_name: str | None = None
+        for name, members in self._correlated_groups.items():
+            if asset_id in members:
+                group_name = name
+                break
+
+        if group_name is None:
+            return None  # Not in any correlated group
+
+        # Calculate total exposure across all assets in this group
+        total_group_exposure = proposed_cost
+        for member_id in self._correlated_groups.get(group_name, set()):
+            if member_id != asset_id:
+                member_exposure = await self.get_exposure_by_market(member_id)
+                total_group_exposure += member_exposure
+
+        max_exposure = balance * (self._correlated_exposure_max_pct / Decimal("100"))
+        if total_group_exposure > max_exposure:
+            return (
+                f"correlated_exposure_exceeded: group={group_name} "
+                f"total={total_group_exposure} > max={max_exposure} "
+                f"({self._correlated_exposure_max_pct}% of {balance})"
+            )
+        return None
+
+    # ── v3: All reinforced checks in one ───────────────────────────────
+
+    async def check_all_v3_breakers(
+        self,
+        asset_id: str,
+        proposed_cost: Decimal,
+    ) -> tuple[bool, str]:
+        """Run all v3 reinforced checks (liquidity, correlated exposure).
+
+        Stop-loss and trailing-profit are checked per-position on price
+        updates, not pre-trade, so they are not included here.
+
+        Returns (passed: bool, reason: str).
+        """
+        liq = await self.check_liquidity(asset_id)
+        if liq is not None:
+            return False, liq
+
+        corr = await self.check_correlated_exposure(asset_id, proposed_cost)
+        if corr is not None:
+            return False, corr
+
+        return True, "ok"
 
     async def startup_cancel_all(self) -> None:
         logger.info("startup: cancelling all residual orders")
