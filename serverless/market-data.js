@@ -363,6 +363,12 @@ function normalizeMarket(raw) {
     gbm: calculateGbmProjection(raw, probability === null ? null : Math.round(probability * 10000) / 10000),
     updatedAt: String(raw.updatedAt || ""),
     endDate: String(raw.endDate || raw.endDateIso || ""),
+    lifecycle: {
+      active: typeof raw.active === "boolean" ? raw.active : null,
+      closed: typeof raw.closed === "boolean" ? raw.closed : null,
+      resolved: typeof raw.resolved === "boolean" ? raw.resolved : null,
+      acceptingOrders: typeof raw.acceptingOrders === "boolean" ? raw.acceptingOrders : null
+    },
     url: slug ? `https://polymarket.com/event/${encodeURIComponent(slug)}` : "https://polymarket.com"
   };
   market.signalDossier = buildSignalDossier(raw, market);

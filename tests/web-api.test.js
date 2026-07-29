@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const { MarketDataError, calculateConfidence, calculateGbmProjection, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
 const { createWebServer } = require("../scripts/web_server");
-const { expectedReturn, simpleAverage } = require("../web/assets/market-math");
+const { expectedReturn, simpleAverage, formatChange, classifyLifecycle, freshness } = require("../web/assets/market-math");
 
 const RAW_MARKET = {
   id: "42",
@@ -34,6 +34,31 @@ test("calculates an unweighted sample average", () => {
   assert.equal(simpleAverage([0.2, null, "bad", 0.8]), 0.5);
 });
 
+test("formats material change without positive or negative zero", () => {
+  assert.equal(formatChange(-0.001), "Sin cambio material");
+  assert.equal(formatChange(0), "Sin cambio material");
+  assert.equal(formatChange(0.051), "+5 %");
+  assert.equal(formatChange(null), "Sin dato");
+  assert.equal(formatChange(undefined), "Sin dato");
+});
+
+test("classifies explicit lifecycle before inferring a passed deadline", () => {
+  const now = Date.parse("2026-07-28T12:00:00Z");
+  assert.deepEqual(classifyLifecycle({ lifecycle: { resolved: true }, endDate: "2027-01-01" }, now), { code: "resolved", label: "Resuelto" });
+  assert.deepEqual(classifyLifecycle({ lifecycle: { active: true }, endDate: "2026-07-27" }, now), { code: "deadline_conflict", label: "Activo tras plazo" });
+  assert.deepEqual(classifyLifecycle({ lifecycle: { active: true }, endDate: "2026-07-29" }, now), { code: "open", label: "Abierto" });
+  assert.deepEqual(classifyLifecycle({ lifecycle: {}, endDate: "2026-07-29" }, now), { code: "unconfirmed", label: "Estado no confirmado" });
+});
+
+test("reports source freshness without treating clock skew as stale", () => {
+  const now = Date.parse("2026-07-28T12:00:00Z");
+  assert.equal(freshness("2026-07-28T11:30:00Z", now).label, "Hace 30 min");
+  assert.equal(freshness("2026-07-26T12:00:00Z", now).code, "stale");
+  assert.equal(freshness("2026-07-29T12:00:00Z", now).code, "invalid");
+  assert.equal(freshness("2026-07-28T12:03:00Z", now).label, "Actualizado ahora");
+  assert.equal(freshness(null, now).code, "unknown");
+});
+
 test("normalizes Gamma string arrays, numbers, category, and URL", () => {
   const market = normalizeMarket(RAW_MARKET);
   assert.equal(market.probability, 0.63);
@@ -41,6 +66,12 @@ test("normalizes Gamma string arrays, numbers, category, and URL", () => {
   assert.equal(market.liquidity, 25000.5);
   assert.equal(market.url, "https://polymarket.com/event/bitcoin-price-in-2027");
   assert.equal(market.updatedAt, "2026-07-26T12:30:00Z");
+  assert.deepEqual(market.lifecycle, { active: null, closed: null, resolved: null, acceptingOrders: null });
+});
+
+test("preserves explicit Gamma lifecycle fields", () => {
+  const market = normalizeMarket({ ...RAW_MARKET, active: false, closed: true, resolved: false, acceptingOrders: false });
+  assert.deepEqual(market.lifecycle, { active: false, closed: true, resolved: false, acceptingOrders: false });
 });
 
 test("does not classify Ethiopia as crypto because it contains eth", () => {

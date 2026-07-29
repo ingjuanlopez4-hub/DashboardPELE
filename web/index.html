@@ -20,9 +20,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Atkinson+Hyperlegible:wght@400;700&family=Azeret+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/styles.css?v=5">
-  <script src="/assets/market-math.js?v=3" defer></script>
-  <script src="/assets/app.js?v=4" defer></script>
+  <link rel="stylesheet" href="/assets/styles.css?v=7">
+  <script src="/assets/market-math.js?v=5" defer></script>
+  <script src="/assets/app.js?v=7" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#markets">Saltar a mercados</a>
@@ -32,7 +32,7 @@
       <span>PELE <small>Registro de señales</small></span>
     </a>
       <div class="topbar-meta">
-         <span class="edition">Gamma / mercados abiertos</span>
+         <span class="edition">Gamma / muestra pública</span>
          <a class="radar-shortcut" href="#markets">Ir al radar <span aria-hidden="true">↓</span></a>
         <a class="alert-counter" href="#alerts" aria-label="Ir al centro de alertas"><span id="alert-count">0</span> alertas</a>
         <div class="live-indicator" id="data-status" data-state="loading" role="status">
@@ -55,15 +55,15 @@
          <path class="trace-ghost" d="M0 92H1200"></path>
          <path class="trace-live" pathLength="1" d="M0 92 L70 92 L84 78 L99 106 L113 92 L240 92 L252 88 L264 96 L276 92 L410 92 L426 48 L442 135 L458 65 L474 116 L490 92 L650 92 L662 84 L674 100 L686 92 L810 92 L825 22 L840 155 L856 50 L872 126 L888 92 L1010 92 L1025 70 L1040 110 L1055 92 L1200 92"></path>
        </svg>
-      <div class="verdict" id="verdict" style="--yes: 50%" aria-label="Media simple de la muestra observada">
-         <div class="verdict-caption"><span>Balance de la muestra</span><span>Media simple / sin ponderar</span></div>
-        <div class="verdict-contract">
-          <div class="verdict-yes"><span>SÍ</span><strong id="verdict-yes">50%</strong></div>
-          <div class="verdict-no"><span>NO</span><strong id="verdict-no">50%</strong></div>
-          <i class="verdict-seam" aria-hidden="true"><b></b></i>
-        </div>
-        <p>Media aritmética sin ponderar de los contratos cargados. No representa consenso del mercado ni certeza.</p>
-      </div>
+       <div class="sample-health" id="sample-health" aria-label="Estado operativo de la muestra">
+         <div class="sample-health-heading"><span>Estado de la muestra</span><strong id="sample-status">Conectando</strong></div>
+         <dl>
+           <div><dt>Señales que requieren atención</dt><dd id="sample-attention">--</dd></div>
+           <div><dt>Cobertura de cambio 24 h</dt><dd id="sample-coverage">--</dd></div>
+           <div><dt>Observación más reciente</dt><dd id="sample-freshness">--</dd></div>
+         </dl>
+         <p>La media simple Sí/No permanece en el resumen inferior; no se interpreta como consenso.</p>
+       </div>
     </section>
 
     <section class="workspace" id="markets" aria-labelledby="markets-title">
@@ -109,13 +109,19 @@
         <label class="opportunity-toggle"><input id="opportunities" type="checkbox"><span><b>Actividad alta</b><small>Índice de actividad ≥ 70/100</small></span></label>
       </form>
 
-      <section class="comparison-panel" id="comparison-panel" hidden aria-labelledby="comparison-title">
+      <section class="comparison-panel" id="comparison-panel" hidden tabindex="-1" aria-labelledby="comparison-title">
         <header>
           <div><span>Comparación fijada</span><h3 id="comparison-title">Señales lado a lado</h3></div>
           <p id="comparison-status" role="status" aria-live="polite">Fija hasta 3 mercados desde las tarjetas.</p>
-        </header>
-        <div class="comparison-items" id="comparison-items"></div>
-      </section>
+         </header>
+         <p class="comparison-summary" id="comparison-summary"></p>
+         <div class="comparison-items" id="comparison-items"></div>
+       </section>
+
+       <div class="comparison-tray" id="comparison-tray" hidden>
+         <span><strong id="comparison-tray-count">0 seleccionados</strong><small>Máximo 3 mercados</small></span>
+         <button id="comparison-tray-action" type="button">Ver comparación</button>
+       </div>
 
       <div id="notice" class="notice" hidden role="status"></div>
       <div id="loading" class="market-grid" aria-label="Cargando mercados" aria-busy="true">
