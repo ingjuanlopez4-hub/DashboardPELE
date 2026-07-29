@@ -38,14 +38,16 @@ async function marketsHandler(request, response) {
   try {
     const { limit, offset } = parsePagination(request.url);
     const markets = await fetchMarkets(limit, offset);
+    const supplementalSources = markets.sources || { dataApi: "unavailable", regional: "unavailable" };
     const hasMore = markets.length === limit;
     const dataAsOf = markets.map(market => market.updatedAt).filter(Boolean).sort().at(-1) || null;
     return send(response, 200, {
       markets,
       count: markets.length,
       source: "gamma",
+      sources: { gamma: "available", ...supplementalSources },
       dataAsOf,
-      dataStatus: markets.length ? "available" : "empty",
+      dataStatus: markets.length ? supplementalSources.dataApi === "available" ? "available" : "partial" : "empty",
       generatedAt: new Date().toISOString(),
       offset,
       hasMore,

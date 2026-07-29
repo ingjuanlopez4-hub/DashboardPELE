@@ -2,7 +2,16 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { MarketDataError, calculateConfidence, calculateGbmProjection, calculateIntelligence, fetchMarkets, normalizeMarket } = require("../serverless/market-data");
+const {
+  MarketDataError,
+  calculateConfidence,
+  calculateGbmProjection,
+  calculateIntelligence,
+  calculateWalletConcentration,
+  fetchMarkets,
+  normalizeMarket,
+  normalizeRegionalSources
+} = require("../serverless/market-data");
 const { parsePagination } = require("../api/markets");
 const { createWebServer } = require("../scripts/web_server");
 const { expectedReturn, simpleAverage, formatChange, classifyLifecycle, freshness } = require("../web/assets/market-math");
@@ -72,6 +81,33 @@ test("normalizes Gamma string arrays, numbers, category, and URL", () => {
 test("preserves explicit Gamma lifecycle fields", () => {
   const market = normalizeMarket({ ...RAW_MARKET, active: false, closed: true, resolved: false, acceptingOrders: false });
   assert.deepEqual(market.lifecycle, { active: false, closed: true, resolved: false, acceptingOrders: false });
+});
+
+test("preserves identifiers needed for public market structure analytics", () => {
+  const market = normalizeMarket({
+    ...RAW_MARKET,
+    clobTokenIds: '["yes-token","no-token"]',
+    negRisk: false,
+    resolutionSource: "https://www.tse.jus.br/eleicoes/resultados"
+  });
+  assert.equal(market.conditionId, "0xabc");
+  assert.deepEqual(market.clobTokenIds, ["yes-token", "no-token"]);
+  assert.deepEqual(market.outcomes, ["Yes", "No"]);
+  assert.equal(market.marketStructure.openInterest.status, "unavailable");
+  assert.equal(market.regionalSources.items[0].publisher, "Tribunal Superior Eleitoral");
+});
+
+test("accepts only allowlisted regional resolution URLs", () => {
+  const sources = normalizeRegionalSources({
+    resolutionSource: "https://resultados.servel.cl/eleccion",
+    events: [
+      { resolutionSource: "https://servel.cl.evil.test/resultados" },
+      { resolutionSource: "javascript:alert(1)" }
+    ]
+  });
+  assert.equal(sources.status, "available");
+  assert.equal(sources.items.length, 1);
+  assert.equal(sources.items[0].country, "CL");
 });
 
 test("does not classify Ethiopia as crypto because it contains eth", () => {
@@ -177,6 +213,32 @@ test("reports unavailable intelligence instead of inventing values", () => {
   assert.equal(intelligence.activityLevel, "unknown");
 });
 
+test("calculates top-wallet concentration per outcome against open interest", () => {
+  const concentration = calculateWalletConcentration([
+    { token: "yes-token", holders: [
+      { proxyWallet: "0xA", amount: 20 },
+      { proxyWallet: "0xa", amount: 5 },
+      { proxyWallet: "0xB", amount: 15 },
+      { proxyWallet: "0xC", amount: 10 }
+    ] },
+    { token: "no-token", holders: [{ proxyWallet: "0xD", amount: 30 }] }
+  ], 100, { clobTokenIds: ["yes-token", "no-token"], outcomes: ["Yes", "No"], negRisk: false });
+  assert.equal(concentration.status, "available");
+  assert.equal(concentration.outcomes[0].sampleSize, 3);
+  assert.equal(concentration.outcomes[0].top1Share, 0.25);
+  assert.equal(concentration.outcomes[0].top5Share, 0.5);
+  assert.equal(concentration.marketTop5Share, 0.5);
+});
+
+test("does not publish concentration with an invalid denominator or negative-risk market", () => {
+  const market = { clobTokenIds: ["yes-token"], outcomes: ["Yes"], negRisk: false };
+  assert.equal(calculateWalletConcentration([], 0, market).status, "unavailable");
+  assert.equal(calculateWalletConcentration([], 100, { ...market, negRisk: true }).status, "unsupported_market_type");
+  assert.equal(calculateWalletConcentration([
+    { token: "yes-token", holders: [{ proxyWallet: "0xA", amount: 102 }] }
+  ], 100, market).status, "inconsistent");
+});
+
 test("runs deterministic GBM paths in log-odds space", () => {
   const raw = {
     conditionId: "gbm-market",
@@ -225,6 +287,45 @@ test("fetches without network and clamps the internal limit", async () => {
   assert.match(calls[0].url, /limit=100/);
   assert.match(calls[0].url, /offset=300/);
   assert.equal(calls[0].options.signal.aborted, false);
+});
+
+test("enriches markets from batched Polymarket Data API responses", async () => {
+  const conditionId = `0x${"a".repeat(64)}`;
+  const calls = [];
+  const fakeFetch = async url => {
+    const href = String(url);
+    calls.push(href);
+    if (href.startsWith("https://gamma-api.polymarket.com")) {
+      return { ok: true, json: async () => [{ ...RAW_MARKET, conditionId, clobTokenIds: '["yes-token","no-token"]' }] };
+    }
+    if (href.startsWith("https://data-api.polymarket.com/oi")) {
+      return { ok: true, json: async () => [{ market: conditionId, value: 100 }] };
+    }
+    return { ok: true, json: async () => [
+      { token: "yes-token", holders: [{ proxyWallet: "0xA", amount: 40 }] },
+      { token: "no-token", holders: [{ proxyWallet: "0xB", amount: 25 }] }
+    ] };
+  };
+  const markets = await fetchMarkets(10, 0, fakeFetch);
+  assert.equal(calls.length, 3);
+  assert.equal(markets.sources.dataApi, "available");
+  assert.equal(markets[0].marketStructure.openInterest.value, 100);
+  assert.equal(markets[0].marketStructure.walletConcentration.marketTop5Share, 0.4);
+  assert.ok(markets[0].signalDossier.evidence.some(item => item.key === "walletConcentration"));
+});
+
+test("keeps Gamma markets when supplemental analytics fail", async () => {
+  const conditionId = `0x${"b".repeat(64)}`;
+  const fakeFetch = async url => {
+    if (String(url).startsWith("https://gamma-api.polymarket.com")) {
+      return { ok: true, json: async () => [{ ...RAW_MARKET, conditionId, clobTokenIds: '["yes-token","no-token"]' }] };
+    }
+    throw new Error("analytics offline");
+  };
+  const markets = await fetchMarkets(10, 0, fakeFetch);
+  assert.equal(markets.length, 1);
+  assert.equal(markets.sources.dataApi, "unavailable");
+  assert.equal(markets[0].marketStructure.openInterest.status, "unavailable");
 });
 
 test("wraps network errors in a safe domain error", async () => {

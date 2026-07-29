@@ -1,9 +1,12 @@
 "use strict";
 
 const GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets";
+const DATA_API_URL = "https://data-api.polymarket.com";
 const DEFAULT_LIMIT = 60;
 const MAX_LIMIT = 100;
 const TIMEOUT_MS = 10000;
+const ANALYTICS_TIMEOUT_MS = 5000;
+const ANALYTICS_BATCH_SIZE = 20;
 const GBM_PATHS = 1000;
 const GBM_SHORT_TERM_DAYS = 7;
 
@@ -13,6 +16,23 @@ class MarketDataError extends Error {
     this.name = "MarketDataError";
   }
 }
+
+const REGIONAL_SOURCE_DOMAINS = new Map([
+  ["tse.jus.br", { publisher: "Tribunal Superior Eleitoral", country: "BR", language: "pt" }],
+  ["ine.mx", { publisher: "Instituto Nacional Electoral", country: "MX", language: "es" }],
+  ["banxico.org.mx", { publisher: "Banco de Mexico", country: "MX", language: "es" }],
+  ["electoral.gob.ar", { publisher: "Camara Nacional Electoral", country: "AR", language: "es" }],
+  ["indec.gob.ar", { publisher: "INDEC", country: "AR", language: "es" }],
+  ["bcra.gob.ar", { publisher: "Banco Central de la Republica Argentina", country: "AR", language: "es" }],
+  ["registraduria.gov.co", { publisher: "Registraduria Nacional", country: "CO", language: "es" }],
+  ["dane.gov.co", { publisher: "DANE", country: "CO", language: "es" }],
+  ["servel.cl", { publisher: "Servicio Electoral de Chile", country: "CL", language: "es" }],
+  ["bcentral.cl", { publisher: "Banco Central de Chile", country: "CL", language: "es" }],
+  ["onpe.gob.pe", { publisher: "ONPE", country: "PE", language: "es" }],
+  ["bcrp.gob.pe", { publisher: "Banco Central de Reserva del Peru", country: "PE", language: "es" }],
+  ["corteelectoral.gub.uy", { publisher: "Corte Electoral", country: "UY", language: "es" }],
+  ["conmebol.com", { publisher: "CONMEBOL", country: "LATAM", language: "es" }]
+]);
 
 function nonNegativeNumber(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -306,6 +326,146 @@ function jsonList(value) {
   }
 }
 
+function normalizeRegionalSources(raw) {
+  const candidates = [raw.resolutionSource, ...(Array.isArray(raw.events) ? raw.events.map(event => event?.resolutionSource) : [])];
+  const items = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(String(candidate).trim());
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) continue;
+      const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+      const match = [...REGIONAL_SOURCE_DOMAINS.entries()].find(([domain]) => hostname === domain || hostname.endsWith(`.${domain}`));
+      if (!match || seen.has(url.href)) continue;
+      seen.add(url.href);
+      items.push({ kind: "resolution", url: url.href, ...match[1], source: "gamma" });
+    } catch {
+      // Gamma may publish a prose resolution rule rather than a URL.
+    }
+  }
+  return { status: items.length ? "available" : "unavailable", region: "latam", items };
+}
+
+function unavailableMetric(reason = "source_unavailable") {
+  return { status: "unavailable", reason, value: null };
+}
+
+function calculateWalletConcentration(holderGroups, openInterest, market) {
+  if (market.negRisk) return { status: "unsupported_market_type", reason: "negative_risk", method: "top_5_outcome_holdings_over_open_interest" };
+  if (!Number.isFinite(openInterest) || openInterest <= 0) return { status: "unavailable", reason: "missing_open_interest", method: "top_5_outcome_holdings_over_open_interest" };
+  const outcomes = [];
+  for (const [outcomeIndex, tokenId] of market.clobTokenIds.entries()) {
+    const group = holderGroups.find(item => String(item?.token || "") === tokenId);
+    if (!group || !Array.isArray(group.holders)) continue;
+    const byWallet = new Map();
+    for (const holder of group.holders) {
+      const wallet = String(holder?.proxyWallet || "").toLowerCase();
+      const amount = nonNegativeNumber(holder?.amount);
+      if (!wallet || amount === null) continue;
+      byWallet.set(wallet, (byWallet.get(wallet) || 0) + amount);
+    }
+    const amounts = [...byWallet.values()].sort((a, b) => b - a);
+    const sum = count => amounts.slice(0, count).reduce((total, amount) => total + amount, 0);
+    const top20Amount = sum(20);
+    if (top20Amount > openInterest * 1.01) {
+      return { status: "inconsistent", reason: "holdings_exceed_open_interest", method: "top_5_outcome_holdings_over_open_interest" };
+    }
+    outcomes.push({
+      outcomeIndex,
+      outcome: market.outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`,
+      tokenId,
+      sampleSize: amounts.length,
+      top1Share: sum(1) / openInterest,
+      top5Share: sum(5) / openInterest,
+      top10Share: sum(10) / openInterest,
+      top20Share: top20Amount / openInterest
+    });
+  }
+  if (!outcomes.length) return { status: "unavailable", reason: "holders_not_published", method: "top_5_outcome_holdings_over_open_interest" };
+  return {
+    status: "available",
+    method: "top_5_outcome_holdings_over_open_interest",
+    sampleLimitPerOutcome: 20,
+    marketTop5Share: Math.max(...outcomes.map(outcome => outcome.top5Share)),
+    outcomes,
+    source: "polymarket_data_api"
+  };
+}
+
+async function fetchJson(url, fetchImpl, timeoutMs = ANALYTICS_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      headers: { Accept: "application/json", "User-Agent": "PELE-dashboard/1.0" },
+      signal: controller.signal
+    });
+    if (!response?.ok) throw new Error("upstream status");
+    const payload = await response.json();
+    if (!Array.isArray(payload)) throw new Error("unexpected payload");
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function enrichMarketStructure(markets, fetchImpl) {
+  const validMarkets = markets.filter(market => /^0x[a-fA-F0-9]{64}$/.test(market.conditionId));
+  if (!validMarkets.length) return { dataApi: "unavailable", regional: markets.some(market => market.regionalSources.status === "available") ? "available" : "unavailable" };
+  const oiRows = [];
+  const holderGroups = [];
+  let oiSucceeded = false;
+  let holdersSucceeded = false;
+  const batchRequests = [];
+  for (let index = 0; index < validMarkets.length; index += ANALYTICS_BATCH_SIZE) {
+    const batch = validMarkets.slice(index, index + ANALYTICS_BATCH_SIZE);
+    const conditionIds = batch.map(market => market.conditionId).join(",");
+    const oiUrl = new URL("/oi", DATA_API_URL);
+    oiUrl.searchParams.set("market", conditionIds);
+    const holdersUrl = new URL("/holders", DATA_API_URL);
+    holdersUrl.searchParams.set("market", conditionIds);
+    holdersUrl.searchParams.set("limit", "20");
+    batchRequests.push(Promise.allSettled([
+      fetchJson(oiUrl, fetchImpl),
+      fetchJson(holdersUrl, fetchImpl)
+    ]));
+  }
+  const batchResults = await Promise.all(batchRequests);
+  for (const [oiResult, holdersResult] of batchResults) {
+    if (oiResult.status === "fulfilled") {
+      oiSucceeded = true;
+      oiRows.push(...oiResult.value);
+    }
+    if (holdersResult.status === "fulfilled") {
+      holdersSucceeded = true;
+      holderGroups.push(...holdersResult.value);
+    }
+  }
+  const oiByMarket = new Map(oiRows.map(row => [String(row?.market || "").toLowerCase(), nonNegativeNumber(row?.value)]));
+  const fetchedAt = new Date().toISOString();
+  for (const market of validMarkets) {
+    const value = oiByMarket.get(market.conditionId.toLowerCase());
+    if (value !== null && value !== undefined) {
+      market.marketStructure.openInterest = { status: "available", value, unit: "collateral", scope: "market", source: "polymarket_data_api", fetchedAt };
+    }
+    if (holdersSucceeded && market.marketStructure.openInterest.status === "available") {
+      market.marketStructure.walletConcentration = {
+        ...calculateWalletConcentration(holderGroups, value, market),
+        fetchedAt
+      };
+    }
+    market.signalDossier.evidence.push(
+      { key: "openInterest", label: "Interes abierto", value: market.marketStructure.openInterest.value, source: "polymarket_data_api", kind: "observed" },
+      { key: "walletConcentration", label: "Concentracion top 5", value: market.marketStructure.walletConcentration.marketTop5Share ?? null, source: "polymarket_data_api", kind: "derived" }
+    );
+  }
+  return {
+    dataApi: oiSucceeded && holdersSucceeded ? "available" : oiSucceeded || holdersSucceeded ? "partial" : "unavailable",
+    regional: markets.some(market => market.regionalSources.status === "available") ? "available" : "unavailable"
+  };
+}
+
 function category(raw) {
   const explicit = String(raw.category || "").trim();
   if (explicit) return explicit.replace(/\b\w/g, letter => letter.toUpperCase());
@@ -348,6 +508,7 @@ function normalizeMarket(raw) {
 
   const market = {
     id: String(raw.conditionId || raw.id || ""),
+    conditionId: String(raw.conditionId || ""),
     question: String(raw.question || "Untitled market").trim(),
     category: category(raw),
     probability: probability === null ? null : Math.round(probability * 10000) / 10000,
@@ -363,6 +524,14 @@ function normalizeMarket(raw) {
     gbm: calculateGbmProjection(raw, probability === null ? null : Math.round(probability * 10000) / 10000),
     updatedAt: String(raw.updatedAt || ""),
     endDate: String(raw.endDate || raw.endDateIso || ""),
+    outcomes,
+    clobTokenIds: jsonList(raw.clobTokenIds).map(String),
+    negRisk: raw.negRisk === true,
+    marketStructure: {
+      openInterest: unavailableMetric(),
+      walletConcentration: { status: "unavailable", reason: "source_unavailable", method: "top_5_outcome_holdings_over_open_interest" }
+    },
+    regionalSources: normalizeRegionalSources(raw),
     lifecycle: {
       active: typeof raw.active === "boolean" ? raw.active : null,
       closed: typeof raw.closed === "boolean" ? raw.closed : null,
@@ -402,7 +571,9 @@ async function fetchMarkets(limit = DEFAULT_LIMIT, offset = 0, fetchImpl = globa
     if (!Array.isArray(payload)) {
       throw new MarketDataError("Gamma API returned an unexpected response");
     }
-    return payload.filter(item => item && typeof item === "object").map(normalizeMarket);
+    const markets = payload.filter(item => item && typeof item === "object").map(normalizeMarket);
+    markets.sources = await enrichMarketStructure(markets, fetchImpl);
+    return markets;
   } catch (error) {
     if (error instanceof MarketDataError) throw error;
     throw new MarketDataError("Gamma API is temporarily unavailable", { cause: error });
@@ -419,7 +590,10 @@ module.exports = {
   calculateConfidence,
   calculateGbmProjection,
   calculateIntelligence,
+  calculateWalletConcentration,
+  enrichMarketStructure,
   estimateGbmVolatility,
   fetchMarkets,
-  normalizeMarket
+  normalizeMarket,
+  normalizeRegionalSources
 };

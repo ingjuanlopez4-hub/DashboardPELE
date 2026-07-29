@@ -47,6 +47,7 @@ const projectionElements = {
 };
 let projectionLoading = false;
 const money = new Intl.NumberFormat("es-ES", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 });
+const compactNumber = new Intl.NumberFormat("es-ES", { notation: "compact", maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 0 });
 const date = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
 const validSorts = new Set(["activity", "volume", "liquidity", "probability", "confidence", "date"]);
@@ -67,6 +68,16 @@ function finite(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function openInterestLabel(metric) {
+  const value = metric?.status === "available" ? finite(metric.value) : null;
+  return value === null ? "No publicado" : `${compactNumber.format(value)} colateral`;
+}
+
+function concentrationLabel(metric) {
+  const share = metric?.status === "available" ? finite(metric.marketTop5Share) : null;
+  return share === null ? metric?.status === "unsupported_market_type" ? "No compatible" : "No publicada" : `${percent.format(share)} top 5`;
 }
 
 function marketKey(market) {
@@ -314,16 +325,26 @@ function card(market) {
             </div>
             <p class="gbm-note"></p>
           </div>
-          <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
-          <div class="dossier-proof"><span>Pruebas y procedencia</span><div></div><small></small></div>
+           <div class="why-change"><span>Qué explica el cambio</span><p></p></div>
+           <div class="structure-context">
+             <span>Estructura y contexto</span>
+             <dl>
+               <div><dt>Interés abierto</dt><dd class="dossier-oi"></dd></div>
+               <div><dt>Concentración</dt><dd class="dossier-concentration"></dd></div>
+             </dl>
+             <p class="concentration-method"></p>
+             <div class="regional-context"><strong>Fuentes regionales</strong><div></div><small></small></div>
+           </div>
+           <div class="dossier-proof"><span>Pruebas y procedencia</span><div></div><small></small></div>
           <label class="personal-belief"><span>Tu probabilidad estimada de Sí (%)</span><input type="number" min="1" max="99" step="1"><strong class="personal-edge" role="status" aria-live="polite"></strong></label>
           <small class="ev-formula">Retorno relativo estimado = (probabilidad propia − spread) ÷ precio − 1. No es una cantidad en dólares.</small>
            <button class="alert-button dossier-watch" type="button" aria-pressed="false"></button>
         </div>
       </details>
       <div class="card-footer">
-        <div class="metric"><span>Volumen</span><strong></strong></div>
-        <div class="metric"><span>Liquidez</span><strong></strong></div>
+         <div class="metric"><span>Volumen</span><strong></strong></div>
+         <div class="metric"><span>Liquidez</span><strong></strong></div>
+         <div class="metric"><span>Interés abierto</span><strong></strong></div>
           <a class="market-link" target="_blank" rel="noopener noreferrer"><span></span><small>Elegibilidad no verificada</small><b aria-hidden="true">&#8599;</b></a>
       </div>
     </div>`;
@@ -421,6 +442,30 @@ function card(market) {
     gbmNote.textContent = reasons[gbm?.reason] || "No hay datos suficientes para ejecutar el modelo.";
   }
   article.querySelector(".why-change p").textContent = intelligence.explanation;
+  const structure = market.marketStructure || {};
+  const openInterest = structure.openInterest || { status: "unavailable" };
+  const concentration = structure.walletConcentration || { status: "unavailable" };
+  article.querySelector(".dossier-oi").textContent = openInterestLabel(openInterest);
+  article.querySelector(".dossier-concentration").textContent = concentrationLabel(concentration);
+  const concentrationMethod = article.querySelector(".concentration-method");
+  concentrationMethod.textContent = concentration.status === "available"
+    ? `Máximo entre outcomes: posiciones de las 5 wallets mayores ÷ OI. Muestra limitada a ${concentration.sampleLimitPerOutcome || 20} holders por outcome.`
+    : concentration.status === "unsupported_market_type"
+      ? "No se calcula en mercados de riesgo negativo porque la conversión entre outcomes altera el denominador."
+      : "Polymarket Data API no publicó OI y holders suficientes para calcular esta lectura.";
+  const regional = market.regionalSources || { status: "unavailable", items: [] };
+  const regionalList = article.querySelector(".regional-context div");
+  for (const source of regional.items || []) {
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `${source.publisher} · ${source.country}`;
+    regionalList.append(link);
+  }
+  article.querySelector(".regional-context small").textContent = regionalList.children.length
+    ? "Fuente oficial de resolución identificada por Gamma; no implica elegibilidad regional."
+    : "No hay una fuente latinoamericana verificable publicada para este contrato.";
   const dossier = market.signalDossier || { status: "insufficient_data", summary: "Expediente no disponible.", evidence: [], provenance: {} };
   const dossierLabels = { attention: "Requiere atención", monitoring: "Sin anomalías", insufficient_data: "Datos insuficientes" };
   const dossierStatus = article.querySelector(".dossier-status");
@@ -430,7 +475,11 @@ function card(market) {
   const proof = article.querySelector(".dossier-proof div");
   for (const evidence of dossier.evidence || []) {
     const item = document.createElement("span");
-    item.textContent = `${evidence.label}: ${evidence.value === null ? "sin dato" : evidence.kind === "model" || evidence.key === "probability" || evidence.key === "change24h" ? percent.format(evidence.value) : evidence.value}`;
+    const formattedValue = evidence.value === null ? "sin dato"
+      : evidence.key === "openInterest" ? `${compactNumber.format(evidence.value)} colateral`
+        : evidence.kind === "model" || evidence.key === "probability" || evidence.key === "change24h" || evidence.key === "walletConcentration" ? percent.format(evidence.value)
+          : evidence.value;
+    item.textContent = `${evidence.label}: ${formattedValue}`;
     item.dataset.kind = evidence.kind;
     proof.append(item);
   }
@@ -521,6 +570,7 @@ function card(market) {
   const metrics = article.querySelectorAll(".metric strong");
   metrics[0].textContent = finite(market.volume) === null ? "Sin dato" : money.format(market.volume);
   metrics[1].textContent = finite(market.liquidity) === null ? "Sin dato" : money.format(market.liquidity);
+  metrics[2].textContent = openInterestLabel(market.marketStructure?.openInterest);
   const marketLink = article.querySelector(".market-link");
   const handoffPrice = probability === null ? "precio no disponible" : `Sí ${percent.format(probability)}`;
   marketLink.href = market.url || "https://polymarket.com";
@@ -557,13 +607,15 @@ function renderComparison() {
     const probability = finite(market.probability);
     const change = finite(market.intelligence?.change24h);
     const confidence = finite(market.confidence?.score);
-    item.innerHTML = `<h4></h4><p class="comparison-item-state"></p><dl><div><dt>Precio de Sí</dt><dd></dd></div><div><dt>Cambio 24 h</dt><dd></dd></div><div><dt>Solidez</dt><dd></dd></div><div><dt>Spread</dt><dd></dd></div></dl><p class="comparison-item-reason"></p><button type="button">Quitar</button>`;
+    item.innerHTML = `<h4></h4><p class="comparison-item-state"></p><dl><div><dt>Precio de Sí</dt><dd></dd></div><div><dt>Cambio 24 h</dt><dd></dd></div><div><dt>Solidez</dt><dd></dd></div><div><dt>Spread</dt><dd></dd></div><div><dt>Interés abierto</dt><dd></dd></div><div><dt>Concentración</dt><dd></dd></div></dl><p class="comparison-item-reason"></p><button type="button">Quitar</button>`;
     item.querySelector("h4").textContent = market.question;
     const values = item.querySelectorAll("dd");
     values[0].textContent = probability === null ? "Sin dato" : percent.format(probability);
     values[1].textContent = formatChange(change);
     values[2].textContent = confidence === null ? "Sin dato" : market.confidence.coverage < 50 ? `Cobertura ${market.confidence.coverage}%` : `${confidence}/100`;
     values[3].textContent = finite(market.spread) === null ? "Sin dato" : percent.format(market.spread);
+    values[4].textContent = openInterestLabel(market.marketStructure?.openInterest);
+    values[5].textContent = concentrationLabel(market.marketStructure?.walletConcentration);
     item.querySelector(".comparison-item-state").textContent = `${classifyLifecycle(market, sourceClockNow()).label} · ${freshness(market.updatedAt, sourceClockNow()).label}`;
     item.querySelector(".comparison-item-reason").textContent = market.signalDossier?.summary || market.intelligence?.explanation || "Sin explicación publicada.";
     const removeButton = item.querySelector("button");
